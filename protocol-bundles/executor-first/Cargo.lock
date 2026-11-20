@@ -690,7 +690,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-assembler-x64-meta",
 ]
@@ -698,7 +698,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64-meta"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-srcgen",
 ]
@@ -706,7 +706,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bforest"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-entity",
  "wasmtime-internal-core",
@@ -715,7 +715,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bitset"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "serde",
  "serde_derive",
@@ -725,7 +725,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
@@ -755,7 +755,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-meta"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
@@ -767,12 +767,12 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-shared"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 
 [[package]]
 name = "cranelift-control"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "arbitrary",
 ]
@@ -780,7 +780,7 @@ dependencies = [
 [[package]]
 name = "cranelift-entity"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-bitset",
  "serde",
@@ -791,7 +791,7 @@ dependencies = [
 [[package]]
 name = "cranelift-frontend"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-codegen",
  "hashbrown 0.17.1",
@@ -803,12 +803,12 @@ dependencies = [
 [[package]]
 name = "cranelift-isle"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 
 [[package]]
 name = "cranelift-native"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-codegen",
  "libc",
@@ -819,7 +819,7 @@ dependencies = [
 [[package]]
 name = "cranelift-srcgen"
 version = "0.138.0-dev"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 
 [[package]]
 name = "crc32fast"
@@ -2600,7 +2600,7 @@ dependencies = [
 [[package]]
 name = "pulley-interpreter"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-bitset",
  "log",
@@ -2611,7 +2611,7 @@ dependencies = [
 [[package]]
 name = "pulley-macros"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3799,7 +3799,7 @@ dependencies = [
 [[package]]
 name = "wasmtime"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "addr2line",
  "async-trait",
@@ -3842,7 +3842,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-environ"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "anyhow",
  "cpp_demangle",
@@ -3871,7 +3871,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-component-macro"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "anyhow",
  "proc-macro2",
@@ -3885,12 +3885,12 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-component-util"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 
 [[package]]
 name = "wasmtime-internal-core"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.1",
@@ -3901,7 +3901,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-cranelift"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-codegen",
  "cranelift-control",
@@ -3926,7 +3926,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-fiber"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cc",
  "libc",
@@ -3939,7 +3939,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-debug"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cc",
  "wasmtime-internal-versioned-export-macros",
@@ -3948,7 +3948,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-icache-coherence"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "libc",
  "wasmtime-internal-core",
@@ -3958,7 +3958,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-unwinder"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "cranelift-codegen",
  "log",
@@ -3969,7 +3969,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-versioned-export-macros"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3979,7 +3979,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-wit-bindgen"
 version = "51.0.0-kontor.2"
-source = "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
+source = "git+https://github.com/wilfreddenton/wasmtime?rev=f93faf7bc720cd84dd9f949a65db769ff1710bd1#f93faf7bc720cd84dd9f949a65db769ff1710bd1"
 dependencies = [
  "anyhow",
  "bitflags 2.13.2",

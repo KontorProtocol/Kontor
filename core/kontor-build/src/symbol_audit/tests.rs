@@ -166,6 +166,132 @@ fn inputs_reject_collisions_namespaces_roles_and_normalized_versions() -> Result
 }
 
 #[test]
+fn same_version_requires_each_graphs_explicit_native_namespace() -> Result<()> {
+    let dir = tempdir()?;
+    let mut graphs = graphs();
+    let mut fixture = Fixture::default();
+    for graph in &mut graphs {
+        graph.identity = json!({"wasmtime_native_symbols":"namespace"});
+        graph.packages.as_mut().unwrap()[0].version = "51.0.0-kontor.2".into();
+        let path = PathBuf::from(&graph.graph);
+        fs::write(dir.path().join(&path), "fixture")?;
+        graph.artifacts.as_mut().unwrap().push(Artifact {
+            path: path.clone(),
+            sha256: None,
+        });
+        fixture.globals.insert(
+            path,
+            definitions(&[(
+                &format!("wasmtime_libunwind_{}", graph.namespace),
+                None,
+                "T",
+            )]),
+        );
+    }
+    let audit = Audit {
+        inspector: &fixture,
+        cwd: dir.path(),
+    };
+    let result = audit.inputs(&graphs)?;
+    assert_eq!(
+        result["versions"],
+        json!(["51.0.0-kontor.2", "51.0.0-kontor.2"])
+    );
+    let mut historical = graphs.clone();
+    for graph in &mut historical {
+        graph.identity = json!({});
+    }
+    assert!(
+        audit
+            .inputs(&historical)
+            .unwrap_err()
+            .to_string()
+            .contains("unique versions")
+    );
+    let mut invalid = graphs.clone();
+    invalid[0].identity["wasmtime_native_symbols"] = json!("unknown");
+    assert!(audit.inputs(&invalid).is_err());
+    for invalid_symbol in [
+        "wasmtime_libunwind_kontor_second",
+        "wasmtime_libunwind_51_0_0_kontor_2",
+    ] {
+        fixture.globals.insert(
+            PathBuf::from("first"),
+            definitions(&[(invalid_symbol, None, "T")]),
+        );
+        let audit = Audit {
+            inspector: &fixture,
+            cwd: dir.path(),
+        };
+        assert!(
+            audit
+                .inputs(&graphs)
+                .unwrap_err()
+                .to_string()
+                .contains("unowned native")
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn final_namespaced_wasmtime_symbols_cannot_alias_or_appear_without_inputs() -> Result<()> {
+    let mut graphs = graphs();
+    for graph in &mut graphs {
+        graph.identity = json!({"wasmtime_native_symbols":"namespace"});
+    }
+    let first = "wasmtime_debug_kontor_first";
+    let second = "wasmtime_debug_kontor_second";
+    let sets = vec![names(&[first]), names(&[second])];
+    let versions = vec![Some("51.0.0-kontor.2".into()); 2];
+    let mut fixture = Fixture::default();
+    fixture.locals.insert(
+        "node".into(),
+        definitions(&[(first, Some("1000"), "t"), (second, Some("2000"), "t")]),
+    );
+    let run = |fixture: &Fixture| {
+        Audit {
+            inspector: fixture,
+            cwd: Path::new("."),
+        }
+        .final_audit(
+            Path::new("node"),
+            &graphs,
+            &sets,
+            &versions,
+            &Owners::new(),
+            Kind::Executor,
+            &Owners::new(),
+        )
+    };
+    run(&fixture)?;
+    fixture
+        .locals
+        .get_mut(Path::new("node"))
+        .unwrap()
+        .get_mut(second)
+        .unwrap()
+        .address = Some("1000".into());
+    assert!(
+        run(&fixture)
+            .unwrap_err()
+            .to_string()
+            .contains("alias one address")
+    );
+    fixture.locals.get_mut(Path::new("node")).unwrap().insert(
+        "wasmtime_untracked_kontor_first".into(),
+        symbol(Some("3000"), "t"),
+    );
+    assert!(
+        run(&fixture)
+            .unwrap_err()
+            .to_string()
+            .contains("unowned graph-private")
+    );
+    Ok(())
+}
+
+#[test]
 fn owner_exceptions_remain_narrow() -> Result<()> {
     let fixture = Fixture::default();
     let audit = Audit {

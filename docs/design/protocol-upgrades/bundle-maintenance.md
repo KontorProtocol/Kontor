@@ -59,11 +59,28 @@ The reserved historical `first` and `second` proof manifests and locks stay
 byte-exact; current proof builds select `pulley-first` and `pulley-second`.
 
 For local Cargo and bundle commands, use the parent directory's `local-build`
-helper and shared slots as described in `AGENTS.md`. No Python or parallel manual
-P1/P2 source edits are involved. The only dependency overlay is the pinned
-Wasmtime `.2` versus `.3` package/revision identity: these revisions have identical
-implementation sources, but the version suffix separates native exports. The
-generator rejects a changed pin pair until that overlay is reviewed again.
+helper and shared slots as described in `AGENTS.md`. No parallel manual P1/P2
+source edits are involved. Current executors use the same Wasmtime version and
+immutable fork revision. `sync-prelaunch` changes only the executor root package
+name in the manifest/lock and copies the qualification fixture. Dependency
+versions, sources and features must match exactly.
+
+The fork's `versioned-export-macros` captures `KONTOR_NATIVE_NAMESPACE` at build
+time for Rust exports/imports and C helper suffixes. Cargo tracks namespace
+changes, and marked bundle builds reject a missing or invalid namespace. Ordinary
+builds without these variables retain Wasmtime's version-based symbol names.
+The builder derives namespaces from graph identities and audits ownership before
+and after linking; sharing a package version does not share a compiled runtime.
+See `KONTOR-NATIVE-NAMESPACE.md` in the pinned Wasmtime fork for patch maintenance.
+Remove the patch only when the selected upstream supplies equivalent explicit
+namespacing and passes the same collision, cache and linked qualification checks.
+
+The sync helper remains limited to the unreleased development/test pair. At
+launch, freeze the actual P1 inputs and preserve its symbol mode. A later reviewed
+change can move current sources to P2 and derive a P3 test successor. Released
+inputs must never become synchronization destinations. Test the real P1-to-P2
+upgrade as well as the development-to-test-successor transition. This role
+advancement is not automated by `sync-prelaunch`.
 
 `tools/kontor protocol-bundles --build-node` defaults to `production-node`, which
 links only P1. `--node-qualification` explicitly selects `managed-node`, adding
@@ -440,7 +457,8 @@ integration checks locally with `cargo test --locked --manifest-path
 core/kontor-build/Cargo.toml --test object_tools -- --ignored`.
 
 `tools/kontor audit-symbols` owns graph input and final-link ownership rules.
-It checks unique graph namespaces and Wasmtime version prefixes, matching PSM
+It checks unique graph namespaces and Wasmtime native symbol namespaces (version
+suffixes for historical graphs), matching PSM
 archive copies, staged input hashes for local symbols, and concrete owners for
 final global and private symbols. Inventory operations require explicit source
 arrays, including intentionally empty arrays. Executor audits permit native
@@ -472,8 +490,8 @@ The separate `protocol-bundles/node` workspace owns node services and physical
 storage, and its resolved graph must not contain Wasmtime, an executor crate or
 one of the independently built consensus crates.
 
-Both `--build-node` and `--build-executors` default to the `managed-node` executor
-pair: retained `first` and current `observer`. Node builds additionally compile
+Both `--build-node` and `--build-executors` default to `production-node` with
+current `first`; `managed-node` qualification adds `observer`. Node builds additionally compile
 the pinned `consensus-first` graph and enable managed startup in the daemon. The explicit `legacy-qualification`
 link set remains for the preserved baseline oracle, not intermediate database
 compatibility. The retired `k4-node` name is rejected by the CLI, recipes and
@@ -481,8 +499,8 @@ compiler wrapper. Executor and consensus roles are recorded
 separately, so their shared `first` label cannot alias native ownership or evidence.
 
 The production recipes `executor-first` and `executor-second` build the actual
-P1 implementation against Wasmtime `51.0.0-kontor.2` and `51.0.0-kontor.3`,
-respectively. The second enables `addr2line` to exercise independent feature
+P1 implementation against the same pinned Wasmtime revision with distinct
+native namespaces. The second enables `addr2line` to exercise independent feature
 resolution. Both retain the P1 lifting rate of 512. These build labels do not
 assign a network protocol version or activate an upgrade.
 
@@ -746,10 +764,11 @@ network upgrade. Production migration registration and approval are separate.
 
 1. Preserve the old manifest, lock, source identity and semantics. Add a new
    protocol mapping rather than rewriting history.
-2. Assign each retained Wasmtime graph a unique immutable package version and
-   native prefix, even when its VM code is otherwise unchanged. Reusing VM code
-   requires a new version-only fork release until a separate native namespace
-   mechanism has been implemented and reviewed.
+2. Give each new graph a distinct build-derived native namespace. Current
+   executors may reuse one immutable Wasmtime revision without version-only
+   releases. Keep the recorded version-based symbol mode and pins of historical
+   proof/retained graphs unchanged; the audit never accepts both naming modes
+   for one graph.
 3. Resolve and commit the new lock deliberately. Keep F2 native patches and F3
    managed-engine ownership. Do not change blst threading features to make
    resource counts pass. Preserve portable lifting charges.

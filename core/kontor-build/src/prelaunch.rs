@@ -6,7 +6,7 @@ use clap::Args;
 use serde_json::{Value, json};
 use toml::Value as Toml;
 
-use crate::recipes::proof_graphs;
+use crate::recipes::{WASMTIME_REVISION, WASMTIME_VERSION};
 
 #[derive(Args)]
 pub struct PrelaunchArgs {
@@ -16,31 +16,19 @@ pub struct PrelaunchArgs {
 
 fn observer_input(source: &str, manifest: bool) -> Result<String> {
     let parsed: Toml = toml::from_str(source)?;
-    let graphs = proof_graphs();
-    let first = &graphs["first"];
-    let second = &graphs["second"];
-    let first_revision = first.revision.as_deref().context("P1 revision missing")?;
-    let first_version = first.version.as_deref().context("P1 version missing")?;
-    let second_revision = second.revision.as_deref().context("P2 revision missing")?;
-    let second_version = second.version.as_deref().context("P2 version missing")?;
-    ensure!(
-        first_revision == "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
-            && first_version == "51.0.0-kontor.2"
-            && second.revision.as_deref() == Some("0dbc68b31c0bcf1a05c93122f1939fb8784e4e48")
-            && second.version.as_deref() == Some("51.0.0-kontor.3"),
-        "new Wasmtime revisions require review of the prelaunch identity-only overlay"
-    );
+    let mut expected = parsed.clone();
     if manifest {
         ensure!(
             parsed["package"]["name"].as_str() == Some("kontor-executor-first")
-                && parsed["dependencies"]["wasmtime"]["rev"].as_str() == Some(first_revision)
+                && parsed["dependencies"]["wasmtime"]["rev"].as_str() == Some(WASMTIME_REVISION)
                 && parsed["dependencies"]["wasmtime"]["version"].as_str()
-                    == Some(&format!("={first_version}")),
-            "prelaunch P1 graph no longer matches the explicit identity overlay"
+                    == Some(&format!("={WASMTIME_VERSION}")),
+            "prelaunch P1 graph does not match the current executor recipe"
         );
+        expected["package"]["name"] = Toml::String("kontor-executor-observer".into());
     } else {
-        let packages = parsed["package"]
-            .as_array()
+        let packages = expected["package"]
+            .as_array_mut()
             .context("lock packages missing")?;
         ensure!(
             packages
@@ -51,51 +39,20 @@ fn observer_input(source: &str, manifest: bool) -> Result<String> {
             "P1 lockfile must contain exactly one executor root"
         );
         ensure!(
-            packages
-                .iter()
-                .any(|p| p["name"].as_str() == Some("wasmtime")
-                    && p["version"].as_str() == Some(first_version)),
-            "P1 lockfile does not contain the pinned Wasmtime version"
+            packages.iter().any(|p| p["name"].as_str() == Some("wasmtime")
+                && p["version"].as_str() == Some(WASMTIME_VERSION)
+                && p.get("source").and_then(Toml::as_str) == Some(&format!(
+                    "git+https://github.com/wilfreddenton/wasmtime?rev={WASMTIME_REVISION}#{WASMTIME_REVISION}"))),
+            "P1 lockfile does not contain the pinned Wasmtime identity"
         );
-    }
-    let mut expected = parsed.clone();
-    if manifest {
-        expected["package"]["name"] = Toml::String("kontor-executor-observer".into());
-        expected["dependencies"]["wasmtime"]["rev"] = Toml::String(second_revision.into());
-        expected["dependencies"]["wasmtime"]["version"] =
-            Toml::String(format!("={second_version}"));
-        expected["patch"]["crates-io"]["wasmtime"]["rev"] = Toml::String(second_revision.into());
-        expected["patch"]["crates-io"]["wasmtime"]["version"] =
-            Toml::String(format!("={second_version}"));
-    } else {
-        let first_source = format!(
-            "git+https://github.com/wilfreddenton/wasmtime?rev={first_revision}#{first_revision}"
-        );
-        let second_source = format!(
-            "git+https://github.com/wilfreddenton/wasmtime?rev={second_revision}#{second_revision}"
-        );
-        for package in expected["package"]
-            .as_array_mut()
-            .context("lock packages missing")?
-        {
+        for package in packages {
             if package["name"].as_str() == Some("kontor-executor-first") {
                 package["name"] = Toml::String("kontor-executor-observer".into());
             }
-            if package.get("source").and_then(Toml::as_str) == Some(&first_source) {
-                package["source"] = Toml::String(second_source.clone());
-                if package["version"].as_str() == Some(first_version) {
-                    package["version"] = Toml::String(second_version.into());
-                }
-            }
         }
     }
-    // These two pinned Wasmtime revisions have identical implementation sources.
-    // Their package versions give native assembly/export symbols separate names.
-    // Never normalize arbitrary dependency differences or generate source rewrites.
-    let generated = source
-        .replace("\"kontor-executor-first\"", "\"kontor-executor-observer\"")
-        .replace(first_revision, second_revision)
-        .replace(first_version, second_version);
+    // Preserve formatting without rewriting unrelated occurrences of the root name.
+    let generated = source.replace("\"kontor-executor-first\"", "\"kontor-executor-observer\"");
     ensure!(
         toml::from_str::<Toml>(&generated)? == expected,
         "identity overlay would change an unrelated TOML field"
@@ -163,7 +120,7 @@ mod tests {
     fn identity_overlay_cannot_rewrite_unrelated_fields() -> Result<()> {
         let source =
             fs::read_to_string(repository().join("protocol-bundles/executor-first/Cargo.toml"))?;
-        let source = format!("{source}\n[package.metadata]\nnote = \"51.0.0-kontor.2\"\n");
+        let source = format!("{source}\n[package.metadata]\nnote = \"kontor-executor-first\"\n");
         assert!(observer_input(&source, true).is_err());
         Ok(())
     }

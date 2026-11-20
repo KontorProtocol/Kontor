@@ -13,6 +13,8 @@ use crate::symbol_audit::suffix;
 
 pub const MALACHITE_REVISION: &str = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09";
 pub const MALACHITE_VERSION: &str = "0.9.0-kontor.1";
+pub const WASMTIME_REVISION: &str = "f93faf7bc720cd84dd9f949a65db769ff1710bd1";
+pub const WASMTIME_VERSION: &str = "51.0.0-kontor.2";
 const K3_SNAPSHOT: &str = "d9d80e4af271ff122aea598778b2f36d0a2d170ffa86ff32a9f42a6328a01c09";
 const HISTORICAL: &[(&str, &str, &str)] = &[
     (
@@ -47,6 +49,8 @@ pub struct Graph {
     pub malachite_engine: bool,
     pub source_root: String,
     pub source_snapshot: Option<String>,
+    #[serde(default)]
+    pub explicit_wasmtime_namespace: bool,
 }
 pub type Graphs = BTreeMap<String, Graph>;
 
@@ -86,13 +90,14 @@ pub fn proof_graphs() -> Graphs {
                 malachite_engine: true,
                 source_root: ".".into(),
                 source_snapshot: None,
+                explicit_wasmtime_namespace: false,
             },
         )
     })
     .collect()
 }
 
-fn current_executors() -> Graphs {
+fn historical_executors() -> Graphs {
     proof_graphs()
         .into_iter()
         .map(|(label, mut graph)| {
@@ -108,8 +113,19 @@ fn current_executors() -> Graphs {
         })
         .collect()
 }
+fn current_executors() -> Graphs {
+    historical_executors()
+        .into_iter()
+        .map(|(label, mut graph)| {
+            graph.revision = Some(WASMTIME_REVISION.into());
+            graph.version = Some(WASMTIME_VERSION.into());
+            graph.explicit_wasmtime_namespace = true;
+            (label, graph)
+        })
+        .collect()
+}
 fn retained_executors() -> Graphs {
-    current_executors()
+    historical_executors()
         .into_iter()
         .map(|(label, mut graph)| {
             graph.source_root = "protocol-bundles/retained/k3".into();
@@ -151,6 +167,7 @@ pub fn consensus_graphs() -> Graphs {
             malachite_engine: true,
             source_root: ".".into(),
             source_snapshot: None,
+            explicit_wasmtime_namespace: false,
         },
     )])
 }
@@ -263,10 +280,12 @@ pub fn verify_reservations(root: &Path, graphs: &Graphs) -> Result<()> {
             .version
             .as_deref()
             .context("recipe Wasmtime version missing")?;
-        ensure!(
-            versions.insert(version.to_string()) && prefixes.insert(suffix(version)),
-            "reserved Wasmtime version or native prefix: {label}"
-        );
+        if !graph.explicit_wasmtime_namespace {
+            ensure!(
+                versions.insert(version.to_string()) && prefixes.insert(suffix(version)),
+                "reserved Wasmtime version or native prefix: {label}"
+            );
+        }
         let dependencies = dependencies(&manifest)?;
         let dependency = dependencies
             .get("wasmtime")
@@ -292,10 +311,13 @@ pub fn identity(root: &Path, label: &str, graphs: &Graphs) -> Result<Value> {
             "malachite_revision":MALACHITE_REVISION, "malachite_version":MALACHITE_VERSION, "manifest_sha256":manifest, "lock_sha256":lock}),
         )
     } else {
-        Ok(
-            json!({"directory":graph.directory, "wasmtime_revision":graph.revision, "source_root":graph.source_root, "source_snapshot":graph.source_snapshot,
-            "wasmtime_version":graph.version, "manifest_sha256":manifest, "lock_sha256":lock, "execution":execution(), "lift_rate":graph.lift_rate}),
-        )
+        let mut identity = json!({"directory":graph.directory, "wasmtime_revision":graph.revision, "source_root":graph.source_root, "source_snapshot":graph.source_snapshot,
+            "wasmtime_version":graph.version, "manifest_sha256":manifest, "lock_sha256":lock, "execution":execution(), "lift_rate":graph.lift_rate});
+        // Omit the new mode for historical graphs to preserve their identities.
+        if graph.explicit_wasmtime_namespace {
+            identity["wasmtime_native_symbols"] = json!("namespace");
+        }
+        Ok(identity)
     }
 }
 pub fn verify_identity(root: &Path, report: &Value, graphs: &Graphs) -> Result<()> {
