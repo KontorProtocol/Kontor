@@ -20,16 +20,6 @@
 
 [advisories]
 ignore = [
-    # libz-sys 1.1.30 via indexer's built -> git2 -> libgit2-sys build dependency.
-    # On Unix, its probe can log the build environment when compiled with
-    # cc >=1.6.0. Cargo retains that output under target/, so shared build
-    # directories, caches or verbose logs can expose build-time secrets.
-    # Accepted prelaunch exception while retaining the S2-qualified lockfile,
-    # not a fix or a claim that build outputs contain no secrets. Remove after
-    # updating libz-sys to >=1.1.31 and validating the changed dependency graph.
-    # Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0418
-    "RUSTSEC-2026-0418",
-
     # ── hickory-proto 0.25.2 ─────────────────────────────────────────────────
     # Pulled in by the pinned Malachite -> libp2p 0.56 DNS/mDNS dependencies.
     # DNS responses need not originate on the local network.
@@ -63,6 +53,14 @@ ignore = [
     "RUSTSEC-2026-0530", # Parent-side NSEC zone cut denial proof.
     "RUSTSEC-2026-0531", # Child-side NSEC/NSEC3 accepted for parent DS proof.
     "RUSTSEC-2026-0532", # Parent-side NSEC3 zone cut denial proof.
+    # Rechecked on 2026-11-20 across core, node, consensus-first and the four
+    # first/second/pulley graphs: hickory-proto enables futures-io/std/tokio,
+    # hickory-resolver enables system-config/tokio, with no DNSSEC features.
+    # These distinct validation advisories are unreachable in those graphs.
+    # Reassess if DNSSEC is enabled; remove with the patched >=0.26.2 upgrade.
+    "RUSTSEC-2026-0549", # NSEC3 apex NODATA proof lacks matching query name.
+    "RUSTSEC-2026-0550", # Unsigned NSEC/NSEC3 accepted in denial proof.
+    "RUSTSEC-2026-0551", # Unvalidated records of another DNS class marked secure.
 
     # Accepted unresolved DoS risk, not an unreachable-code exception: malformed
     # DNS wire counts can allocate about 18 MB before decoding fails. Malachite
