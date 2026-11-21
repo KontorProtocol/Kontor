@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anyhow::{Result, bail, ensure};
 use wasmtime::component::{
@@ -105,11 +105,11 @@ impl ArgumentBuilder<'_> {
             Type::Record(record) => {
                 // WAVE accepts unordered fields; its parser rejects duplicates. Raw
                 // syntax, including unknown fields, is covered by WaveInputBytes.
-                let supplied = node.as_record(self.source)?.collect::<BTreeMap<_, _>>();
+                let mut supplied = node.as_record(self.source)?.collect::<BTreeMap<_, _>>();
                 let mut fields = Vec::new();
                 for field in record.fields() {
                     self.charge_field(field.name)?;
-                    let val = if let Some(node) = supplied.get(field.name) {
+                    let val = if let Some(node) = supplied.remove(field.name) {
                         self.value(node, &field.ty, depth + 1)?
                     } else {
                         self.charge_value()?;
@@ -122,6 +122,7 @@ impl ArgumentBuilder<'_> {
                     };
                     fields.push((field.name.to_owned(), val));
                 }
+                ensure!(supplied.is_empty(), "unknown record field");
                 Val::Record(fields)
             }
             Type::Tuple(tuple) => {
@@ -191,21 +192,24 @@ impl ArgumentBuilder<'_> {
                 Val::Result(val)
             }
             Type::Flags(flags) => {
-                // Validate membership once instead of scanning the schema for every
+                // Preserve declaration order without scanning the schema for every
                 // supplied flag. Both the schema and supplied names can be large.
-                let mut names = BTreeSet::new();
-                for name in flags.names() {
+                let mut names = BTreeMap::new();
+                for (index, name) in flags.names().enumerate() {
                     self.charge_field(name)?;
-                    names.insert(name);
+                    names.insert(name, index);
                 }
                 let mut values = Vec::new();
                 for name in node.as_flags(self.source)? {
                     self.charge_value()?;
                     self.add_lowering_cost(name.len() as u64)?;
-                    ensure!(names.contains(name), "unknown flag: {name}");
-                    values.push(name.to_owned());
+                    let Some(&index) = names.get(name) else {
+                        bail!("unknown flag: {name}");
+                    };
+                    values.push((index, name.to_owned()));
                 }
-                Val::Flags(values)
+                values.sort_unstable_by_key(|(index, _)| *index);
+                Val::Flags(values.into_iter().map(|(_, name)| name).collect())
             }
             // No compound value may fall through to the unbounded stock builder.
             Type::Bool

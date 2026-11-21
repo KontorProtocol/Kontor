@@ -26,9 +26,9 @@ use crate::test_utils::test_runtime;
 
 const BORROW_ERROR: &str = "borrow handles still remain at the end of the call";
 const ORIGINAL_RAW_SHA256: &str =
-    "a0baab5a112f662229b3d2f576c9f4f1698fcb757a3d309ad62206548cfb9e2b";
+    "5f6072d6e9f7a9e97cb48a89201e2a5d482009e2d21dcd4b5e34d51a8d8372c3";
 const ORIGINAL_COMPRESSED_SHA256: &str =
-    "b7b66b69ccd700a03970a2d089de9933b23238f582e3a85c65048ca35786a4a0";
+    "2fc30aabf2c9cebb2c4afd7322c92cad6ce30dd18f29d0fdf64aa56343a31e2e";
 
 #[derive(Clone, Copy)]
 enum Fault {
@@ -125,7 +125,7 @@ fn inject_resource_fault(bytes: &[u8], fault: Fault) -> Result<Vec<u8>> {
                         let mut drop_call = None;
                         while !operators.eof() {
                             let (operator, offset) = operators.read_with_offset()?;
-                            if matches!(operator, Operator::Call { function_index: 59 }) {
+                            if matches!(operator, Operator::Call { function_index: 58 }) {
                                 ensure!(drop_call.is_none(), "unexpected duplicate proc drop");
                                 drop_call = Some(offset);
                             }
@@ -133,18 +133,18 @@ fn inject_resource_fault(bytes: &[u8], fault: Fault) -> Result<Vec<u8>> {
                         let offset = usize::try_from(
                             drop_call.ok_or_else(|| anyhow!("missing proc drop"))? - range.start,
                         )?;
-                        // Call 59 wraps proc-context drop, call 62 wraps view-context
+                        // Call 58 wraps proc-context drop, call 61 wraps view-context
                         // drop. The raw hash pins these indices and one-byte LEBs.
-                        ensure!(original.get(offset..offset + 2) == Some(&[0x10, 0x3b][..]));
+                        ensure!(original.get(offset..offset + 2) == Some(&[0x10, 0x3a][..]));
                         match fault {
                             Fault::UnreleasedBorrow => {
                                 original[offset..offset + 2].copy_from_slice(&[0x1a, 0x01]);
                             }
                             Fault::DoubleDrop => {
-                                original.splice(offset + 2..offset + 2, [0x20, 0x00, 0x10, 0x3b]);
+                                original.splice(offset + 2..offset + 2, [0x20, 0x00, 0x10, 0x3a]);
                             }
                             Fault::WrongType => {
-                                original[offset..offset + 2].copy_from_slice(&[0x10, 0x3e]);
+                                original[offset..offset + 2].copy_from_slice(&[0x10, 0x3d]);
                             }
                         }
                         section.raw(&original);
