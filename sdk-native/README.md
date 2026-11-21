@@ -102,8 +102,10 @@ are missing.
 - **`uniffi-bindgen-react-native` is an npm package, not a cargo crate.** It ships
   the `ubrn` CLI. `cargo install uniffi-bindgen-react-native` does NOT work.
 - **Version must match the `uniffi` crate.** `core/kontor-sdk-native` pins
-  `uniffi = "0.31.2"`, so this package pins `ubrn` `0.31.0-7`. If you bump one,
-  bump the other in lockstep (all published `ubrn` versions are `-N` prereleases).
+  `uniffi = "0.31.2"` and this package pins `ubrn` `0.31.0-7`, which share the
+  UniFFI 0.31 metadata ABI. Recheck ABI compatibility and regenerate bindings
+  when either changes. The generator's `-N` release suffix is independent of
+  the Rust crate's patch version.
 - **Run `ubrn` from an interactive terminal.** In a headless / non-TTY context
   (background job, some CI shells) the CLI can hang with no output on first run.
   Locally, run it directly in your shell; in CI, allocate a TTY if needed.
