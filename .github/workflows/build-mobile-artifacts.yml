@@ -38,9 +38,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+      - name: Read pinned Node version
+        id: sdk-node
+        run: echo "version=$(jq -r .node.version tools/build.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v7
         with:
-          node-version: "24.22.1"
+          node-version: ${{ steps.sdk-node.outputs.version }}
       - uses: dtolnay/rust-toolchain@1.100.0
       - name: Add Rust targets
         run: rustup target add ${{ matrix.targets }}

@@ -13,7 +13,7 @@ too_many_arguments = "allow"
 
 [dependencies]
 anyhow = { version = "=1.0.104", default-features = false, features = ["std"] }
-clap = { version = "=4.6.7", features = ["derive"] }
+clap = { version = "=4.6.9", features = ["derive"] }
 serde = { version = "=1.0.229", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "=1.0.154", default-features = false, features = ["alloc", "std"] }
 sha2 = "=0.11.1"
@@ -24,7 +24,7 @@ libc = "=0.2.191"
 sha1 = "=0.10.7"
 flate2 = "=1.1.10"
 tar = { version = "=0.4.46", default-features = false }
-regex = "=1.13.1"
+regex = "=1.13.2"
 tempfile = "=3.27.0"
 num-bigint = "=0.4.8"
 num-rational = "=0.4.2"

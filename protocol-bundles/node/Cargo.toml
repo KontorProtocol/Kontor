@@ -29,7 +29,7 @@ indexer-types = { "path" = "../../core/indexer-types" }
 wit-validator = { "path" = "../../core/wit-validator" }
 anyhow = { "version" = "=1.0.104", "default-features" = false }
 axum = { "version" = "=0.8.9", "features" = ["http2"] }
-tokio = { "version" = "=1.53.3", "features" = ["full"] }
+tokio = { "version" = "=1.54.1", "features" = ["full"] }
 tower-http = { "version" = "=0.7.1", "features" = ["fs", "trace", "compression-full", "request-id", "timeout", "catch-panic", "cors"] }
 tower = { "version" = "=0.5.3" }
 wasm-wave = { "version" = "=0.262.0", "default-features" = false }
@@ -37,11 +37,11 @@ wit-component = { "version" = "=0.262.0" }
 wasmparser = { "version" = "=0.262.0", "default-features" = false, "features" = ["std", "component-model"] }
 libsql = { "version" = "=0.10.0", "default-features" = false, "features" = ["core", "serde", "stream"] }
 tracing = { "version" = "=0.1.44" }
-bon = { "version" = "=3.10.2", "default-features" = false, "features" = ["alloc"] }
+bon = { "version" = "=3.10.3", "default-features" = false, "features" = ["alloc"] }
 tempfile = { "version" = "=3.27.0" }
 serde = { "version" = "=1.0.229", "default-features" = false, "features" = ["alloc", "derive"] }
 serde_json = { "version" = "=1.0.154", "default-features" = false, "features" = ["alloc"] }
-serde_with = { "version" = "=3.24.0", "default-features" = false, "features" = ["alloc", "macros"] }
+serde_with = { "version" = "=3.25.0", "default-features" = false, "features" = ["alloc", "macros"] }
 ts-rs = { "version" = "=12.0.1", "features" = ["format"] }
 indexmap = { "version" = "=2.14.2", "features" = ["serde"] }
 bitcoin = { "version" = "=0.32.102", "default-features" = false, "features" = ["std", "secp-recovery", "serde", "rand", "rand-std"] }
@@ -55,21 +55,21 @@ tracing-subscriber = { "version" = "=0.3.23", "features" = ["env-filter", "json"
 zmq = "=0.10.0"
 rayon = "=1.12.0"
 priority-queue = "=2.7.0"
-clap = { "version" = "=4.6.7", "features" = ["derive", "env"] }
+clap = { "version" = "=4.6.9", "features" = ["derive", "env"] }
 axum-server = "=0.8.0"
 futures-util = "=0.3.34"
 hex = "=0.4.3"
 hkdf = "=0.13.0"
-rand = "=0.10.3"
+rand = "=0.10.4"
 rand_chacha = "=0.10.0"
-brotli = "=9.1.0"
+brotli = "=9.1.3"
 postcard = { "version" = "1.1.3", "default-features" = false, "features" = ["alloc"] }
 sha2 = "=0.11.1"
 num = { "version" = "=0.4.3" }
 fastnum = { "version" = "=0.7.5" }
 strum = { "version" = "=0.28.0", "features" = ["derive"] }
 tracing-stackdriver = "=0.10.0"
-regex = "=1.13.1"
+regex = "=1.13.2"
 kontor-crypto = "0.3.0"
 ff = "=0.13.1"
 moka = { "version" = "0.12.16", "features" = ["future"] }
@@ -89,7 +89,7 @@ malachitebft-core-consensus = { git = "https://github.com/KontorProtocol/malachi
 malachitebft-proto = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-proto" }
 malachitebft-sync = { git = "https://github.com/KontorProtocol/malachite", rev = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09", version = "=0.9.0-kontor.1", "package" = "arc-malachitebft-sync" }
 async-trait = { "version" = "=0.1.92" }
-bytes = { "version" = "=1.12.1" }
+bytes = { "version" = "=1.12.2" }
 prost = { "version" = "=0.13.5" }
 sha3 = { "version" = "=0.12.0" }
 
