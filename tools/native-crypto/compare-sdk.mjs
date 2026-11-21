@@ -51,15 +51,17 @@ if (!baselinePath || !candidatePath || !reportPath) {
 }
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const expected = JSON.parse(await readFile(new URL("./fixtures/sdk-vectors.json", import.meta.url), "utf8"));
+const build = JSON.parse(await readFile(new URL("../build.json", import.meta.url), "utf8"));
 const baselineWasm = await readFile(new URL("kontor-sdk.core.wasm", pathToFileURL(resolve(baselinePath))));
 assert.equal(sha256(baselineWasm), expected.reference_wasm_sha256, "baseline must be the recorded pristine SDK artifact");
-assert.equal(process.version, expected.node, "run with the recorded pinned Node version");
+assert.equal(process.version, `v${build.node.version}`, "run with the current pinned Node version");
 const baseline = exercise(await import(pathToFileURL(resolve(baselinePath)).href));
 const candidate = exercise(await import(pathToFileURL(resolve(candidatePath)).href));
 assert.deepEqual(baseline, expected.vectors, "baseline must reproduce the recorded crypto vectors");
 assert.deepEqual(candidate, baseline, "SDK crypto outputs differ from the committed upstream build");
 const report = {
   node: process.version,
+  referenceNode: expected.node,
   baselineModuleSha256: sha256(await readFile(baselinePath)),
   candidateModuleSha256: sha256(await readFile(candidatePath)),
   baselineWasmSha256: sha256(await readFile(new URL("kontor-sdk.core.wasm", pathToFileURL(resolve(baselinePath))))),

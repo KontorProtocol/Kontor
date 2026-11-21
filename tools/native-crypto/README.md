@@ -111,8 +111,11 @@ standalone lock; `tools/kontor check-native-helper-lock` enforces their agreemen
 
 The ordinary reproducible-build CI job also compares the actual SDK Wasm crypto
 API with the committed pristine reference identified in `fixtures/sdk-vectors.json`.
-`compare-sdk.mjs` checks the reference Wasm hash and pinned Node version before
-executing either API. Its report is included in the generated-output artifact.
+`compare-sdk.mjs` checks the reference Wasm hash and the current Node pin from
+`tools/build.json` before executing both APIs on that runtime. The fixture keeps
+its original capture Node version; the report records both versions. A Node
+upgrade must reproduce the unchanged reference vectors and match them with the
+candidate. Its report is included in the generated-output artifact.
 The native SDK integration test consumes the same independent vectors and error
 messages. The fixture covers Kontor's min_sig scheme and EIP-2333 derivation.
 Changes to these reference values need an explicit compatibility decision and
