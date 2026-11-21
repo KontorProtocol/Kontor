@@ -43,7 +43,17 @@ export interface ProtocolDescriptor {
   installed: boolean;
 }
 
-/** Diagnostic snapshot. Lineage and closure identifiers are not certified state roots. */
+export interface ObservedHash {
+  height: string;
+  hash: string;
+}
+
+export interface ProtocolObservation {
+  bitcoin_tip: ObservedHash | null;
+  checkpoint: ObservedHash | null;
+}
+
+/** One database snapshot. Compare checkpoints only at matching ready positions. */
 export interface ProtocolSnapshot {
   availability:
     | "uninitialized"
@@ -66,6 +76,7 @@ export interface ProtocolSnapshot {
     lineage: string;
     storage_height: string;
   } | null;
+  observation: ProtocolObservation | null;
   installed_protocols: ProtocolDescriptor[];
   build: {
     target: string;

@@ -8,6 +8,7 @@ use ts_rs::TS;
 use crate::build_record;
 use crate::database::canonical_history::{self, HistoryState};
 use crate::database::certified_history::{self, Status, eras};
+use crate::database::queries::{get_checkpoint_latest, select_block_latest};
 use crate::protocol::coordinator::baseline::Baseline;
 use crate::protocol::coordinator::manifest::ProtocolManifest;
 use crate::protocol::coordinator::registry::{self, UnavailableProtocol};
@@ -117,11 +118,24 @@ pub struct BuildProvenance {
 }
 
 #[derive(Debug, Serialize, TS)]
+pub struct ObservedHash {
+    pub height: String,
+    pub hash: String,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct ProtocolObservation {
+    pub bitcoin_tip: Option<ObservedHash>,
+    pub checkpoint: Option<ObservedHash>,
+}
+
+#[derive(Debug, Serialize, TS)]
 pub struct ProtocolSnapshot {
     pub availability: ProtocolAvailability,
     pub chain_id: Option<String>,
     pub certified: Option<CertifiedProgress>,
     pub canonical: Option<CanonicalProtocol>,
+    pub observation: Option<ProtocolObservation>,
     pub installed_protocols: Vec<ProtocolDescriptor>,
     pub build: Option<BuildProvenance>,
 }
@@ -136,6 +150,7 @@ pub(crate) async fn snapshot(conn: &Connection) -> Result<ProtocolSnapshot> {
         chain_id: None,
         certified: None,
         canonical: None,
+        observation: None,
         installed_protocols: Vec::new(),
         build: None,
     };
@@ -192,6 +207,18 @@ pub(crate) async fn snapshot(conn: &Connection) -> Result<ProtocolSnapshot> {
         unreachable!()
     };
     result.chain_id = Some(hex::encode(cursor.chain.0));
+    result.observation = Some(ProtocolObservation {
+        bitcoin_tip: select_block_latest(conn).await?.map(|block| ObservedHash {
+            height: block.height.to_string(),
+            hash: block.hash.to_string(),
+        }),
+        checkpoint: get_checkpoint_latest(conn)
+            .await?
+            .map(|checkpoint| ObservedHash {
+                height: checkpoint.height.to_string(),
+                hash: checkpoint.hash,
+            }),
+    });
     let manifest = certified_history::protocol(conn, eras::selected_protocol(conn).await?).await?;
     ensure!(
         manifest.chain == cursor.chain,
@@ -231,8 +258,17 @@ pub(crate) async fn snapshot(conn: &Connection) -> Result<ProtocolSnapshot> {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+    use std::time::Duration;
+
+    use indexer_types::BlockRow;
+    use libsql::TransactionBehavior;
+    use tokio::sync::oneshot;
+    use tokio::time::timeout;
+
     use super::*;
     use crate::consensus::{Address, signing::PrivateKey};
+    use crate::database::queries::insert_block;
     use crate::protocol::coordinator::registration_history::{
         ObservationPosition, RegistrationSnapshot,
     };
@@ -248,10 +284,12 @@ mod tests {
         assert!(snapshot(&conn).await.is_err());
         let read = reader.connection().await?;
         read.execute("BEGIN", ()).await?;
+        let uninitialized = snapshot(&read).await?;
         assert_eq!(
-            snapshot(&read).await?.availability,
+            uninitialized.availability,
             ProtocolAvailability::Uninitialized
         );
+        assert!(uninitialized.observation.is_none());
         read.execute("ROLLBACK", ()).await?;
 
         let baseline = Baseline::for_node(ChainId([9; 32]))?;
@@ -280,8 +318,41 @@ mod tests {
         )?;
         certified_history::finish_genesis(&conn, &observation).await?;
         read.execute("BEGIN", ()).await?;
+        let empty = snapshot(&read).await?.observation.unwrap();
+        assert!(empty.bitcoin_tip.is_none());
+        assert!(empty.checkpoint.is_none());
+        read.execute("COMMIT", ()).await?;
+
+        let height = 9_007_199_254_740_993_u64;
+        for h in [height - 1, height] {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(if h == height { "ab" } else { "aa" }.repeat(32).parse()?)
+                    .build(),
+            )
+            .await?;
+        }
+        conn.execute(
+            "INSERT INTO checkpoints (height, hash) VALUES (?, ?)",
+            (height - 1, "cd".repeat(32)),
+        )
+        .await?;
+        read.execute("BEGIN", ()).await?;
         let before = snapshot(&read).await?;
         assert_eq!(before.availability, ProtocolAvailability::Ready);
+        let observed = before.observation.as_ref().unwrap();
+        assert_eq!(
+            observed.bitcoin_tip.as_ref().unwrap().height,
+            height.to_string()
+        );
+        assert_eq!(observed.bitcoin_tip.as_ref().unwrap().hash, "ab".repeat(32));
+        assert_eq!(
+            observed.checkpoint.as_ref().unwrap().height,
+            (height - 1).to_string()
+        );
+        assert_eq!(observed.checkpoint.as_ref().unwrap().hash, "cd".repeat(32));
         let canonical = before.canonical.as_ref().unwrap();
         assert_eq!(
             canonical.protocol.protocol_id,
@@ -293,6 +364,35 @@ mod tests {
         );
         assert_eq!(canonical.protocol.host_abis, baseline.manifest.host_abis);
         assert!(canonical.protocol.installed);
+
+        conn.execute("BEGIN IMMEDIATE", ()).await?;
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height + 1)
+                .hash("ef".repeat(32).parse()?)
+                .build(),
+        )
+        .await?;
+        conn.execute(
+            "INSERT INTO checkpoints (height, hash) VALUES (?, ?)",
+            (height + 1, "12".repeat(32)),
+        )
+        .await?;
+        conn.execute("COMMIT", ()).await?;
+        assert_eq!(
+            serde_json::to_value(snapshot(&read).await?)?,
+            serde_json::to_value(&before)?
+        );
+        read.execute("COMMIT", ()).await?;
+        read.execute("BEGIN", ()).await?;
+        let before = snapshot(&read).await?;
+        let observed = before.observation.as_ref().unwrap();
+        assert_eq!(
+            observed.bitcoin_tip.as_ref().unwrap().height,
+            (height + 1).to_string()
+        );
+        assert_eq!(observed.checkpoint.as_ref().unwrap().hash, "12".repeat(32));
 
         conn.execute(
             "UPDATE canonical_history_state SET status = 'unavailable', chain_id = NULL,
@@ -312,12 +412,55 @@ mod tests {
             ProtocolAvailability::HistoryUnavailable
         );
         assert!(unavailable.canonical.is_none());
+        assert!(unavailable.observation.is_none());
         assert_eq!(unavailable.certified.unwrap().closed_height, "0");
         read.execute("COMMIT", ()).await?;
         assert!(matches!(
             canonical_history::state(&conn).await?,
             HistoryState::Unavailable
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_diagnostic_read_releases_transaction_without_blocking_writer() -> Result<()>
+    {
+        let (reader, writer, _directory) = new_test_db().await?;
+        let (opened, ready) = oneshot::channel();
+        let connection = reader.connection().await?;
+        let probe = connection.clone();
+        let task = tokio::spawn(async move {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .await
+                .unwrap();
+            snapshot(&transaction).await.unwrap();
+            opened.send(()).unwrap();
+            pending::<()>().await;
+            transaction.commit().await.unwrap();
+        });
+        ready.await?;
+        let conn = writer.connection();
+        timeout(
+            Duration::from_secs(2),
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(1)
+                    .hash("ab".repeat(32).parse()?)
+                    .build(),
+            ),
+        )
+        .await??;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(
+            probe.is_autocommit(),
+            "cancelled read must not return an open transaction to the pool"
+        );
+        let next = timeout(Duration::from_secs(2), reader.connection()).await??;
+        assert!(next.is_autocommit());
+        assert_eq!(select_block_latest(&next).await?.unwrap().height, 1);
         Ok(())
     }
 

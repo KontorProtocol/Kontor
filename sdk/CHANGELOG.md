@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+`session.getProtocol()` now includes the indexed Bitcoin tip and latest checkpoint
+with full hashes and exact decimal heights, read with protocol progress in one
+database snapshot. Compare only ready observations at the same closed position;
+rollback and replay can replace checkpoints.
+
 Funding now uses per-submission leases. Uncertain broadcasts retain their signed
 package and funding through `SubmissionError.recovery` and
 `session.transport.pendingSubmissions()`, supporting exact retry, read-only

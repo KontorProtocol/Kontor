@@ -97,6 +97,8 @@ export type {
   SimulationReport,
   SimulationPreview,
   ProtocolDescriptor,
+  ObservedHash,
+  ProtocolObservation,
   ProtocolSnapshot,
 } from "./protocol.js";
 export type {
