@@ -89,6 +89,21 @@ pub enum ProtocolAvailability {
     Ready,
 }
 
+pub(crate) fn history_availability(status: Status, history: HistoryState) -> ProtocolAvailability {
+    match (status, history) {
+        (Status::Unavailable, _) | (_, HistoryState::Unavailable) => {
+            ProtocolAvailability::HistoryUnavailable
+        }
+        (Status::Pending | Status::Initializing, _) | (_, HistoryState::PendingGenesis) => {
+            ProtocolAvailability::Uninitialized
+        }
+        (Status::Ready, HistoryState::Ready(cursor)) if cursor.authentic => {
+            ProtocolAvailability::Recovering
+        }
+        _ => ProtocolAvailability::HistoryUnavailable,
+    }
+}
+
 #[derive(Debug, Serialize, TS)]
 pub struct CertifiedProgress {
     pub authenticated_height: String,
@@ -188,18 +203,7 @@ pub(crate) async fn snapshot(conn: &Connection) -> Result<ProtocolSnapshot> {
         ordering_era_id: frontier.context.map(|context| hex::encode(context.era)),
     });
     let history = canonical_history::state(conn).await?;
-    result.availability = match (frontier.status, history) {
-        (Status::Unavailable, _) | (_, HistoryState::Unavailable) => {
-            ProtocolAvailability::HistoryUnavailable
-        }
-        (Status::Pending | Status::Initializing, _) | (_, HistoryState::PendingGenesis) => {
-            ProtocolAvailability::Uninitialized
-        }
-        (Status::Ready, HistoryState::Ready(cursor)) if cursor.authentic => {
-            ProtocolAvailability::Recovering
-        }
-        _ => ProtocolAvailability::HistoryUnavailable,
-    };
+    result.availability = history_availability(frontier.status, history);
     if result.availability != ProtocolAvailability::Recovering {
         return Ok(result);
     }

@@ -7,6 +7,7 @@ mod channel_bridge;
 mod config;
 mod engine;
 mod factory;
+mod metrics;
 pub use engine::Engine;
 pub use factory::{network_peer_id, start};
 #[path = "types.rs"]

@@ -22,6 +22,8 @@ use crate::consensus::signing::PrivateKey;
 use crate::database::Writer;
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::logging;
+#[cfg(not(kontor_consensus_runtime))]
+use crate::metrics::Telemetry;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::{BlockingGate, Decimal, GenesisValidator};
@@ -63,6 +65,10 @@ async fn shutdown_during_owned_genesis_keeps_writer_until_publication_stops() ->
         coordinator
     };
     let mut reactor = run(
+        #[cfg(kontor_consensus_runtime)]
+        coordinator.telemetry(),
+        #[cfg(not(kontor_consensus_runtime))]
+        Telemetry::new(),
         1,
         shutdown.signal(),
         owner.clone(),

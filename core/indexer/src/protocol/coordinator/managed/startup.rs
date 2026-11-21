@@ -136,6 +136,8 @@ pub(crate) fn start(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Barrier;
+    use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -144,6 +146,7 @@ mod tests {
 
     use super::*;
     use crate::consensus::test_fixtures;
+    use crate::metrics::validate_engine_sample;
     use crate::protocol::coordinator::durable_signer::SignerIdentity;
     use crate::protocol::coordinator::managed::types::{EnginePoll, EngineState, Request};
 
@@ -196,6 +199,23 @@ mod tests {
                 assert!(Instant::now() < deadline, "engine did not become ready");
                 thread::sleep(Duration::from_millis(2));
             }
+            let source = engine.metrics_source();
+            let collector_source = source.clone();
+            let barrier = Arc::new(Barrier::new(2));
+            let collector_barrier = barrier.clone();
+            let (finished, collected) = mpsc::channel();
+            let collector = thread::spawn(move || {
+                collector_barrier.wait();
+                for _ in 0..128 {
+                    let text = collector_source.collect().unwrap();
+                    assert!(text.len() <= 1024 * 1024);
+                    assert!(text.ends_with("# EOF\n"));
+                    assert!(text.contains("malachitebft_core_consensus_height"));
+                    validate_engine_sample(&text).unwrap();
+                }
+                finished.send(()).unwrap();
+            });
+            barrier.wait();
             // Revocation is a node operation, independent of the engine owner.
             signer.fence_generation(generation).unwrap();
             engine.request_stop().unwrap();
@@ -203,6 +223,10 @@ mod tests {
             assert_eq!(engine.state(), EngineState::Joined);
             drop(engine);
             drop(signer);
+            collected.recv_timeout(Duration::from_secs(10)).unwrap();
+            collector.join().unwrap();
+            // A retained registry must not retain the ownership lease checked below.
+            assert!(!source.collect().unwrap().is_empty());
             assert!(matches!(
                 DurableSigner::open(
                     &signer_path,

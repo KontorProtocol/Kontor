@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::config::DEFAULT_VIEW_GAS_LIMIT;
+use crate::metrics::Telemetry;
 use crate::upgrade_control::UpgradeSubmission;
 use anyhow::Result;
 use bitcoin::Network;
@@ -19,6 +20,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct Env {
+    pub telemetry: Telemetry,
     pub config: Config,
     pub shutdown: ShutdownSignal,
     pub reader: database::Reader,
@@ -60,6 +62,7 @@ pub struct Env {
 }
 
 pub struct DaemonEnv {
+    pub telemetry: Telemetry,
     pub config: Config,
     pub shutdown: ShutdownSignal,
     pub reader: database::Reader,
@@ -86,6 +89,7 @@ impl Env {
             parts.config.view_gas_limit,
         )?;
         Ok(Self {
+            telemetry: parts.telemetry,
             config: parts.config,
             shutdown: parts.shutdown,
             reader: parts.reader,
@@ -112,6 +116,7 @@ impl Env {
         let (simulate_tx, _) = tokio::sync::mpsc::channel(10);
         let (_, fees_rx) = watch::channel(Fees::floor(1));
         Ok(Self {
+            telemetry: Telemetry::new(),
             bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
             config: Config {
                 network: Network::Regtest,

@@ -16,6 +16,7 @@ use crate::consensus::signing::PrivateKey;
 use crate::database::{
     Reader, Writer, admit_node_database, certified_history, open_node_database_for_genesis,
 };
+use crate::metrics::Telemetry;
 use crate::protocol::coordinator::certified_input::EraContext;
 use crate::protocol::coordinator::durable_signer::{
     DurableSigner, GenerationOwner, OwnedGeneration, SignerRecovery,
@@ -59,6 +60,10 @@ pub struct NodeCoordinator {
 }
 
 impl NodeCoordinator {
+    pub fn telemetry(&self) -> Telemetry {
+        Telemetry::new().with_engine(self.slot.metrics.clone())
+    }
+
     pub async fn open_database(
         config: &EngineConfig,
         filename: &str,

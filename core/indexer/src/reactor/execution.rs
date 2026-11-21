@@ -17,6 +17,7 @@ use crate::database::certified_history::{
     self, Status, branch, closure, completion, control, finality, reconcile, replay_input, work,
 };
 use crate::database::queries::{PRUNE_WATERMARK_KEY, get_meta_u64, select_block_latest};
+use crate::metrics::{Step, Telemetry};
 use crate::protocol::coordinator::activation_execution;
 use crate::protocol::coordinator::application_closure::{StageOutcome, WorkItem};
 use crate::protocol::coordinator::certified_input::Command;
@@ -35,6 +36,7 @@ use crate::stopper::ShutdownSignal;
 // Startup hands this owner to the live reactor after recovery. No engine, RPC
 // admission state, or notification channel is needed to apply certified work.
 pub(super) struct ExecutionContext<E: Executor> {
+    pub(super) telemetry: Telemetry,
     pub(super) executor: E,
     pub(super) recognizer: TransactionRecognizer,
     pub(super) session: LinkedSession,
@@ -66,6 +68,7 @@ impl<E: Executor> ExecutionContext<E> {
             session.executor.operations.recognize.clone(),
         );
         Self {
+            telemetry: Telemetry::default(),
             executor,
             recognizer,
             session,
@@ -176,6 +179,28 @@ impl<E: Executor> ExecutionContext<E> {
         height: u64,
     ) -> impl Future<Output = Result<ExecutionStep>> + '_ {
         Box::pin(async move {
+            let mut observation = self.telemetry.begin_step(height);
+            let before = self.last_height;
+            let result = self
+                .step_certified_closure_observed(height, &mut observation)
+                .await;
+            observation.finish(result.is_ok());
+            if let Ok(step) = &result {
+                if let ExecutionStep::RolledBack(after) = step {
+                    self.telemetry.rollback_complete(before, *after);
+                }
+                self.telemetry.observe(&self.session.conn).await;
+            }
+            result
+        })
+    }
+
+    fn step_certified_closure_observed<'a>(
+        &'a mut self,
+        height: u64,
+        observation: &'a mut Step,
+    ) -> impl Future<Output = Result<ExecutionStep>> + 'a {
+        Box::pin(async move {
             let conn = self.db_conn();
             if certified_history::frontier(&conn).await?.closed_height >= height {
                 completion::completed(&conn, height).await?;
@@ -188,6 +213,7 @@ impl<E: Executor> ExecutionContext<E> {
                 self.restore_canonical_session().await?;
                 return Ok(ExecutionStep::Complete);
             };
+            observation.action(action);
             let selection = select_stage(&conn, self.network, action).await?;
             self.select_session(&selection).await?;
             let outcome: Result<ExecutionStep> = match action {

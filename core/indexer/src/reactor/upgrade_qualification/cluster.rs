@@ -6,6 +6,7 @@ use anyhow::{Context, Error, Result, anyhow, ensure};
 use bitcoin::{
     Block, BlockHash, blockdata::constants::genesis_block, consensus::serialize, hashes::Hash,
 };
+use futures_util::future::try_join_all;
 use indexer_types::{BlockRow, ContractArtifactSource, ContractProvenanceResponse, ViewResult};
 use libsql::{Connection, params};
 use malachitebft_app_channel::app::config::{BootstrapProtocol, DiscoveryConfig, Selector};
@@ -116,7 +117,14 @@ impl Node {
             consensus_peers: config.persistent_peers.clone(),
             ..Config::new_na()
         };
+        let telemetry = coordinator.telemetry();
+        let collector = telemetry.clone();
+        let collector_shutdown = shutdown.signal();
+        tokio::spawn(async move {
+            collector.collect_engine(collector_shutdown).await;
+        });
         let (services, io) = match Services::start(
+            telemetry.clone(),
             api_config,
             reader,
             service.clone(),
@@ -133,6 +141,7 @@ impl Node {
             }
         };
         let task = reactor::run(
+            telemetry,
             1,
             shutdown.signal(),
             service.clone(),
@@ -301,6 +310,71 @@ async fn broadcast(nodes: &[Node], height: u64, block: Block) -> Result<()> {
     Ok(())
 }
 
+async fn check_observations(nodes: &[Node], capture_metrics: bool) -> Result<()> {
+    let chain = hex::encode(eras::genesis(&nodes[0].observer).await?.chain.0);
+    let observations = timeout(Duration::from_secs(10), async {
+        loop {
+            let observations =
+                try_join_all(nodes.iter().map(|node| node.services.protocol())).await?;
+            for observation in &observations {
+                ensure!(
+                    observation["chain_id"] == chain,
+                    "unexpected observation chain"
+                );
+            }
+            let position = &observations[0]["certified"]["closed_height"];
+            if observations.iter().all(|o| {
+                o["availability"] == "ready" && o["certified"]["closed_height"] == *position
+            }) {
+                break Ok::<_, Error>(observations);
+            }
+            // Different completed positions are lag, not evidence of divergence.
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .context("no overlapping ready protocol observations")??;
+    for observation in &observations {
+        for field in ["certified", "canonical", "observation"] {
+            ensure!(
+                observation[field] == observations[0][field],
+                "nodes diverge in {field} at a matching closed position"
+            );
+        }
+        let checkpoint = &observation["observation"]["checkpoint"];
+        ensure!(
+            checkpoint["hash"]
+                .as_str()
+                .is_some_and(|hash| hash.len() == 64),
+            "checkpoint unavailable for comparison"
+        );
+    }
+    eprintln!(
+        "OBSERVABILITY_PROTOCOL {}",
+        serde_json::to_string(&observations)?
+    );
+    if capture_metrics {
+        for node in nodes {
+            let text = timeout(Duration::from_secs(15), async {
+                loop {
+                    let text = node.services.metrics().await?;
+                    if text.contains("kontor_engine_metrics_available 1\n") {
+                        break Ok::<_, Error>(text);
+                    }
+                    sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .context("managed metrics sample unavailable")??;
+            ensure!(text.contains("kontor_state_observation_valid 1\n"));
+            ensure!(text.contains("kontor_protocol_state{state=\"ready\"} 1\n"));
+            ensure!(text.contains("# TYPE malachitebft_core_consensus_height gauge\n"));
+            eprintln!("OBSERVABILITY_METRICS {}", serde_json::to_string(&text)?);
+        }
+    }
+    Ok(())
+}
+
 async fn check_client_context(
     node: &Node,
     height: u64,
@@ -373,6 +447,7 @@ pub(crate) async fn run() -> Result<Value> {
         broadcast(&nodes, 1, block.clone()).await?;
         let c1 = wait_all(&mut nodes, 1, block.block_hash(), first).await?;
         let p1_preview = check_client_context(&nodes[0], 1, block.block_hash(), first).await?;
+        check_observations(&nodes, false).await?;
         for node in &nodes {
             ensure!(node.view().await?.get("Err").is_some(), "activation ran before H");
         }
@@ -382,6 +457,7 @@ pub(crate) async fn run() -> Result<Value> {
         broadcast(&nodes, 2, next.clone()).await?;
         let c2 = wait_all(&mut nodes, 2, next.block_hash(), target).await?;
         let p2_preview = check_client_context(&nodes[0], 2, next.block_hash(), target).await?;
+        check_observations(&nodes, false).await?;
         for node in &nodes {
             ensure!(node.view().await? == json!({"Ok":"2"}), "P2 fixture initialization differs");
         }
@@ -417,6 +493,7 @@ pub(crate) async fn run() -> Result<Value> {
         broadcast(&nodes, 1, replacement.clone()).await?;
         let c4 = wait_all(&mut nodes, 1, replacement.block_hash(), first).await?;
         let restored_preview = check_client_context(&nodes[0], 1, replacement.block_hash(), first).await?;
+        check_observations(&nodes, false).await?;
         ensure!(restored_preview["rollback_generation"] != p1_preview["rollback_generation"]);
         let restored_era = eras::at(&nodes[0].observer, c4).await?.context("restored P1 era")?;
         ensure!(restored_era.start_height()? == c4 + 1);
@@ -439,6 +516,7 @@ pub(crate) async fn run() -> Result<Value> {
         replacement.header.nonce = replacement.header.nonce.wrapping_add(1);
         broadcast(&nodes, 3, replacement.clone()).await?;
         let c6 = wait_all(&mut nodes, 3, replacement.block_hash(), target).await?;
+        check_observations(&nodes, true).await?;
         let expected = completion::completed(&nodes[0].observer, c6).await?;
         let expected_state = state(&nodes[0].observer).await?;
         let expected_era = eras::at(&nodes[0].observer, c5).await?.context("second P2 era")?;

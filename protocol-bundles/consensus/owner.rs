@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Error, Result, bail, ensure};
@@ -13,9 +14,10 @@ use malachitebft_engine::network::NetworkStateDump;
 use malachitebft_engine::util::events::TxEvent;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::api::{ProposalPartBytes, ReplyToken, Response};
+use crate::api::{MetricsSource, ProposalPartBytes, ReplyToken, Response};
 use crate::channel_bridge::{ChannelBridge, Poll, Publish};
 use crate::consensus::Ctx;
+use crate::metrics::BoundedText;
 use crate::replies::{Delivery, ReplyError};
 use crate::wire::WireCodec;
 
@@ -82,6 +84,15 @@ impl Owner {
 
     pub(crate) fn state(&self) -> State {
         self.state
+    }
+
+    pub(crate) fn metrics_source(&self) -> MetricsSource {
+        let registry = self.engine.registry().clone();
+        MetricsSource(Arc::new(move || {
+            let mut output = BoundedText::default();
+            let result = registry.export(&mut output);
+            output.finish(result)
+        }))
     }
 
     pub(crate) fn failure(&self) -> Option<&str> {

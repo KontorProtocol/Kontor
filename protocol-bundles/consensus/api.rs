@@ -3,7 +3,25 @@
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
+
+/// A data-only registry handle. It owns no engine, thread, or signing capability.
+#[derive(Clone)]
+pub struct MetricsSource(pub(crate) Arc<dyn Fn() -> Result<String, MetricsError> + Send + Sync>);
+
+impl MetricsSource {
+    /// Synchronous collection belongs on the node's single diagnostics worker.
+    pub fn collect(&self) -> Result<String, MetricsError> {
+        (self.0)()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MetricsError {
+    OutputLimit,
+    Encoding,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReplyToken {

@@ -14,6 +14,7 @@ use super::types::{
     Delivery, EngineError, EnginePoll, EngineState, Event, ProposalPartBytes, PublishError,
     ReplyToken, Response,
 };
+use crate::metrics::EngineMetrics;
 use crate::protocol::coordinator::durable_signer::{DurableSigner, OwnedGeneration};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
@@ -21,6 +22,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(2);
 #[derive(Default)]
 pub(crate) struct EngineSlot {
     occupied: Arc<AtomicBool>,
+    pub(crate) metrics: EngineMetrics,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,6 +148,7 @@ impl EngineSlot {
         let thread_stop = stop.clone();
         let thread_signer = signer.clone();
         let worker_ownership = ownership.clone();
+        let metrics = self.metrics.clone();
         let worker = match thread::Builder::new()
             .name(format!("consensus-control-{generation}"))
             .spawn(move || {
@@ -159,6 +162,7 @@ impl EngineSlot {
                     generation,
                     capacity,
                     deadline,
+                    metrics,
                 );
                 // Retain the OS ownership lease even if the public handle is dropped
                 // while engine construction or teardown is still blocked.
@@ -379,6 +383,7 @@ fn run<F>(
     generation: u64,
     capacity: usize,
     deadline: WallInstant,
+    metrics: EngineMetrics,
 ) -> Result<(), EngineError>
 where
     F: FnOnce() -> Result<RuntimeEngine, EngineError>,
@@ -391,6 +396,11 @@ where
             return Ok(());
         }
         engine = Some(factory()?);
+        let source = engine.as_ref().expect("created engine").metrics_source();
+        let _registration = metrics.install(
+            Arc::new(move || source.collect().map_err(|_| "export")),
+            stop.clone(),
+        );
         drive(
             engine.as_mut().expect("created engine"),
             &mut commands,
