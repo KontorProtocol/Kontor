@@ -248,4 +248,3 @@ Bitcoin tip, and checkpoint height/hash. Do not group observations by the hash
 under comparison. Different heights indicate lag or incomparable samples;
 missing checkpoints cannot establish equality. These checks do not establish
 that either node is caught up to the network.
-
