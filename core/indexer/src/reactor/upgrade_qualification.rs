@@ -169,6 +169,7 @@ async fn restart(
         let (address_tx, mut addresses) = watch::channel(None);
         let shutdown = Shutdown::new();
         let mut running = super::run(
+            coordinator.telemetry(),
             1,
             shutdown.signal(),
             service.clone(),
