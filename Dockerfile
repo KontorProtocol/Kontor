@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG CHEF_IMAGE=docker.io/lukemathwalker/cargo-chef:0.1.78-rust-1.100.0-slim-trixie
+ARG CHEF_IMAGE=docker.io/lukemathwalker/cargo-chef:0.1.78-rust-1.100.0-slim-trixie@sha256:4d92a0744e1fc09016839c7658af38a00157c8d542a1684b32ce60f9a364fd31
 
 FROM ${CHEF_IMAGE} AS builder-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -39,7 +39,7 @@ RUN tools/kontor protocol-bundles --build-node --offline \
 # the compiled binary. No toolchain, no source, no package-manager
 # state.
 # ---------------------------------------------------------------------
-FROM docker.io/debian:trixie-slim
+FROM docker.io/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzmq5 \
@@ -71,11 +71,10 @@ ENV DATA_DIR=/data \
 EXPOSE 9333
 VOLUME ["/data"]
 
-# Health check — hits the indexer's /api root once it's serving.
-# 60s start period covers cold boot: DB init, mempool sync, first
-# fee projection.
+# API reachability alone does not establish readiness. Kubernetes configures
+# separate startup, liveness and readiness probes in the deployment chart.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl --fail --silent "http://127.0.0.1:${API_PORT}/api" || exit 1
+    CMD curl --fail --silent "http://127.0.0.1:${API_PORT}/healthz/ready" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/kontor"]
 CMD ["run"]
