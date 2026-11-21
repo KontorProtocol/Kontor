@@ -179,14 +179,23 @@ impl Services {
         let signal = shutdown.signal();
         let traffic = tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    biased;
-                    _ = signal.cancelled() => return Ok(()),
-                    result = probe.get(format!("http://{address}/healthz/live")).send() => {
-                        result?.error_for_status()?;
-                        count.fetch_add(1, Ordering::Relaxed);
+                for path in ["/healthz/live", "/metrics"] {
+                    tokio::select! {
+                        biased;
+                        _ = signal.cancelled() => return Ok(()),
+                        result = async {
+                            let body = probe.get(format!("http://{address}{path}"))
+                                .send().await?.error_for_status()?.text().await?;
+                            ensure!(body.len() < 2 * 1024 * 1024);
+                            if path == "/metrics" {
+                                ensure!(body.contains("kontor_engine_metrics_available"));
+                                ensure!(!body.contains("# EOF"));
+                            }
+                            Ok::<_, Error>(())
+                        } => { result?; }
                     }
                 }
+                count.fetch_add(1, Ordering::Relaxed);
                 tokio::select! {
                     biased;
                     _ = signal.cancelled() => return Ok(()),
