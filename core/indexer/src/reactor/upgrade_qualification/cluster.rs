@@ -642,6 +642,7 @@ pub(crate) async fn run_join() -> Result<Value> {
             Ok(Err(error)) => return Err(error),
             Ok(Ok(_)) => return Err(anyhow!("two of four members certified H+1")),
         }
+        let before_join = nodes[1].services.protocol().await?;
         let peers = nodes[1..]
             .iter()
             .map(|node| node.listener.clone())
@@ -659,6 +660,7 @@ pub(crate) async fn run_join() -> Result<Value> {
         );
         nodes[3].ready().await?;
         wait_all(&mut nodes[1..], 2, block.block_hash(), target).await?;
+        check_observations(&nodes[1..], false).await?;
         for height in 1..=floor {
             let original = certified_history::load(&nodes[0].observer, height).await?;
             let joined = certified_history::load(&nodes[3].observer, height).await?;
@@ -672,6 +674,15 @@ pub(crate) async fn run_join() -> Result<Value> {
         nodes[3].services.advance(2, &block);
         broadcast(&nodes[1..], 3, pending.clone()).await?;
         let decided = wait_all(&mut nodes[1..], 3, pending.block_hash(), target).await?;
+        check_observations(&nodes[1..], false).await?;
+        let after_join = nodes[3].services.protocol().await?;
+        ensure!(before_join["chain_id"] == after_join["chain_id"]);
+        ensure!(
+            before_join["certified"]["closed_height"] != after_join["certified"]["closed_height"]
+        );
+        // A delayed monitoring response from before catch-up is incomparable,
+        // even though both samples individually describe completed work.
+        eprintln!("OBSERVABILITY_LAG {}", json!([before_join, after_join]));
         let promoted_status = nodes[3]
             .services
             .runtime(EngineAuthority::Validator)
