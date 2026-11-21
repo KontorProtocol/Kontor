@@ -1,9 +1,9 @@
 {
   "archives": {
     "node": {
-      "sha256": "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3",
-      "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-arm64.tar.gz",
-      "version": "24.22.1"
+      "sha256": "261af2af250dfd7e9f25cf151d1b2713a0adf8f10a9ad116c4947f68627affe8",
+      "url": "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-arm64.tar.gz",
+      "version": "24.22.3"
     },
     "wasi_sdk": {
       "sha256": "f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971",
@@ -20,8 +20,8 @@
   "clang": "clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141)\nTarget: wasm32-unknown-wasip1\nThread model: posix\nInstalledDir: /build/.build-cache/tools/f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971/bin\nConfiguration file: /build/.build-cache/tools/f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971/bin/clang.cfg",
   "image": "docker.io/kontorprotocol/kontor-build@sha256:53f2be7d48a15f8fa92e1f9decdb514671ece3c7cfe26849f00383b60385ee39",
   "jco": "1.39.0",
-  "node": "v24.22.1",
-  "npm_lock_sha256": "21c9f6f2d7f1ef26d7bbe4d1fc495ba7ffc5c8c3e306cf0657394d6607e04817",
+  "node": "v24.22.3",
+  "npm_lock_sha256": "39e235f636e6ef35f4677c5be1b8d7fa4903a3d2232ca6eeb28745082c5d86df",
   "platform": "linux/arm64",
   "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
   "wasm_opt": "wasm-opt version 133 (version_133)",

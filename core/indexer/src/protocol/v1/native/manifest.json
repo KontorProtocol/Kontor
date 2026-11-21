@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "definition": "legacy-p1-native-genesis",
-  "source_commit": "5f98f81332a9bf4a99f9a2c1cf23d68b19ce3330",
+  "source_commit": "99aeb17c57927fdfa051a353dea2bf4960784675",
   "contracts": [
     {
       "id": 1,
       "name": "token",
-      "sha256": "5dbb9da10199d369171dc6b9e562728d2f0abd52641f65ddd5af9f5d7ceec5ee",
+      "sha256": "c7c36da14b4d62ea3aae246cfb9e129d4cb2cf0244c481e002d206a60e7e8010",
       "privileged": true,
       "deposit_exempt": true,
       "unrecorded_results": [
@@ -18,7 +18,7 @@
     {
       "id": 2,
       "name": "filestorage",
-      "sha256": "ef9210f753de8f7cf42f5ed00996404e3d8ddecb54c1503f82b4af6a6d149d6e",
+      "sha256": "ef06db057858776e5a8667868a3a599b04a05186f1591fec0d06d56cb1725a4f",
       "privileged": true,
       "deposit_exempt": false,
       "unrecorded_results": [],
@@ -27,7 +27,7 @@
     {
       "id": 3,
       "name": "staking",
-      "sha256": "44e25c29062bbb6b6d50e9fc2c4273c6c71910c9d629db98079ff09a152d16ab",
+      "sha256": "ac4957df0e8cf94257f18062bcb4d90f28f588affb66cb283b4bbe2df8b09bb4",
       "privileged": true,
       "deposit_exempt": false,
       "unrecorded_results": [],
@@ -36,7 +36,7 @@
     {
       "id": 4,
       "name": "system",
-      "sha256": "85e1bc5c7063e0ab6e5ae2c2dacaa43edba50ff9a493df9d95cf2b11778dacc9",
+      "sha256": "8e49fe3cb2268d017eb359e554f9ccb8768cc980cc62093694f71890fe158935",
       "privileged": true,
       "deposit_exempt": false,
       "unrecorded_results": [],
@@ -45,7 +45,7 @@
     {
       "id": 5,
       "name": "nft",
-      "sha256": "cdabb8de32bcb8c43bb4794b3fd48f72de9519288cb1d508fa5029275c80c296",
+      "sha256": "a4b90115550fe1fa542b14e7e8a0c80cc47cfec99e5de18024a0fd3b066b49f5",
       "privileged": true,
       "deposit_exempt": false,
       "unrecorded_results": [],
@@ -54,9 +54,9 @@
   ],
   "files": {
     "build.json": "381101290c0c1ca96b0feb6cda509290cb9e7ea685aa39e53a0e1feed04cbf3b",
-    "toolchain.json": "48a591c9737df9bb73cacbc14035ed8f8ada5ce0c683b698815f8d3b8909c5c6",
-    "provenance.json": "4c196357554bd3752b1fd4a6ae2a595523b181eee204213772ae17bd74c09bdb",
-    "provenance.bin": "5e9734b80677428c64987f57e4193f5d824c1b7f46062306e2b44390bb1ccb62"
+    "toolchain.json": "5d67fd8467494beb1f27d8d016a64a33352a4ce78497e4ad96d8af6f9069a15d",
+    "provenance.json": "5e79cb1f08b992395658bfe9a017ef5c01f1d61ab2057eaaec21b3c6bebfe6c4",
+    "provenance.bin": "8b664bc1b35f1935354cc0d4f147c6405645ac65d621a7d9a0720046d707e56c"
   },
   "core_signer_id": 1
 }
