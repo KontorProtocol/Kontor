@@ -99,7 +99,7 @@ prost = { workspace = true }
 sha3 = { workspace = true }
 
 [dev-dependencies]
-wat = "=1.262.0"
+wat = "=1.263.0"
 wasm-encoder = { workspace = true }
 wasmtime = { workspace = true, features = ["call-hook"] }
 testlib = { path = "../testlib" }
@@ -110,7 +110,7 @@ axum-test = "=21.1.0"
 proptest = "=1.12.0"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-rustix = { version = "=1.1.5", features = ["mm"] }
+rustix = { version = "=1.1.6", features = ["mm"] }
 libc = "=0.2.191"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]

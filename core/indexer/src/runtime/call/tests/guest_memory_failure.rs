@@ -1,5 +1,4 @@
 use std::ptr::null_mut;
-use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -10,7 +9,7 @@ use rustix::param::page_size;
 use wasmtime::component::Component;
 use wasmtime::{
     Engine, Error, GcHeapOutOfMemory, Instance, InstanceAllocationStrategy, LinearMemory,
-    MemoryCreator, MemoryType, Module, Result as WasmtimeResult, Store,
+    MemoryCreator, MemoryKind, MemoryRequest, Module, Result as WasmtimeResult, Store,
 };
 
 use super::funded;
@@ -69,26 +68,23 @@ struct FailingCreator {
 // SAFETY: Each returned memory exclusively owns its guarded mapping. The
 // creator keeps only the failure counter, never a pointer to the mapping.
 unsafe impl MemoryCreator for FailingCreator {
-    fn new_memory(
-        &self,
-        _ty: MemoryType,
-        minimum: usize,
-        maximum: Option<usize>,
-        reserved_size_in_bytes: Option<usize>,
-        guard_size_in_bytes: usize,
-    ) -> StdResult<Box<dyn LinearMemory>, String> {
+    fn new_memory(&self, request: &MemoryRequest<'_>) -> WasmtimeResult<Box<dyn LinearMemory>> {
+        let minimum = request.minimum();
+        let maximum = request.maximum();
         match self.kind {
             Kind::Linear => {
+                assert_eq!(request.kind(), MemoryKind::LinearMemory);
                 assert_eq!(minimum, PAGE);
                 assert_eq!(maximum, Some(2 * PAGE));
             }
             Kind::Gc => {
+                assert_eq!(request.kind(), MemoryKind::GcHeap);
                 assert_eq!(minimum, 0);
                 assert_eq!(maximum, Some(1 << 32));
             }
         }
-        assert_eq!(reserved_size_in_bytes, Some(0));
-        assert_eq!(guard_size_in_bytes, 0);
+        assert_eq!(request.reserved_size_in_bytes(), 0);
+        assert_eq!(request.guard_size_in_bytes(), 0);
         let host_page = page_size();
         assert_eq!(PAGE % host_page, 0);
         let mapping_len = 2 * PAGE + host_page;
@@ -100,13 +96,13 @@ unsafe impl MemoryCreator for FailingCreator {
                 MapFlags::PRIVATE,
             )
         }
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| Error::msg(error.to_string()))?;
         if minimum != 0
             && let Err(error) =
                 unsafe { mprotect(mapping, minimum, MprotectFlags::READ | MprotectFlags::WRITE) }
         {
             unsafe { munmap(mapping, mapping_len).expect("valid mapping") };
-            return Err(error.to_string());
+            return Err(Error::msg(error.to_string()));
         }
         Ok(Box::new(FailingMemory {
             mapping: mapping as usize,
