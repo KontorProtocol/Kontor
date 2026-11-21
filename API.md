@@ -227,3 +227,24 @@ Fresh lookup bypasses the node's transaction cache. Confirmed transaction lookup
 requires Bitcoin Core's `txindex=1`; an unavailable lookup stays unknown. This
 prelaunch change replaces the old broadcast `{ txid }` response. The SDK retains
 signed submission recovery and funding ownership across uncertain outcomes.
+
+### Protocol observations
+
+`GET /api/protocol` is available independently of the normal API readiness gate.
+It returns protocol availability, canonical protocol identity, certified progress,
+installed protocols, and `observation` from one deferred database read transaction.
+No Bitcoin RPC is performed for this request.
+
+`observation` is null when authentic initialized canonical history is unavailable.
+Otherwise it contains nullable `bitcoin_tip` and `checkpoint` members, each with
+`height` (an exact decimal string) and `hash` (the full hexadecimal hash). Each
+height belongs to its own row: checkpoints can be sparse. Rollback and replay can
+replace both rows. A recovering or unsupported observation is diagnostic, not a
+completed state suitable for cross-node equality checks.
+
+Compare ready nodes on the expected chain at the same `certified.closed_height`.
+Then compare the full certified decision, canonical protocol and lineage,
+Bitcoin tip, and checkpoint height/hash. Do not group observations by the hash
+under comparison. Different heights indicate lag or incomparable samples;
+missing checkpoints cannot establish equality. These checks do not establish
+that either node is caught up to the network.

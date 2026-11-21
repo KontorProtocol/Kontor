@@ -20,7 +20,7 @@ use crate::reactor::executor::RuntimeExecutor;
 use crate::runtime::ownership::OwnerService;
 use crate::runtime::ownership::adapter::SessionFactory;
 use crate::runtime::pool::LinkedSession;
-use crate::stopper::Shutdown;
+use crate::stopper::{Shutdown, ShutdownSignal};
 
 async fn open(
     path: &Path,
@@ -59,6 +59,15 @@ pub(super) fn compare<'a>(
     Box::pin(compare_inner(source, factory, height))
 }
 
+// The fixture has several recovery awaits. Construct their futures outside its
+// poll frame so inactive call-site temporaries do not consume the debug stack.
+fn recover<'a>(
+    execution: &'a mut ExecutionContext<RuntimeExecutor>,
+    shutdown: &'a ShutdownSignal,
+) -> BoxFuture<'a, Result<bool>> {
+    Box::pin(execution.recover(shutdown))
+}
+
 async fn compare_inner(
     source: &ExecutionContext<RuntimeExecutor>,
     factory: &SessionFactory,
@@ -86,7 +95,7 @@ async fn compare_inner(
         source.protocol_context,
     )
     .await?;
-    ensure!(reference.recover(&Shutdown::new().signal()).await?);
+    ensure!(recover(&mut reference, &Shutdown::new().signal()).await?);
     let expected = full_state(&reference.db_conn()).await?;
     let expected_tip = (reference.last_height, reference.last_hash);
     let expected_closure = completion::completed(&reference.db_conn(), height).await?;
@@ -104,7 +113,7 @@ async fn compare_inner(
     ensure!(full_state(&conn).await? != expected);
     let cancelled = Shutdown::new();
     cancelled.cancel();
-    ensure!(!interrupted.recover(&cancelled.signal()).await?);
+    ensure!(!recover(&mut interrupted, &cancelled.signal()).await?);
     let mut pages = 0;
     let mut rollbacks = 0;
     let mut replayed = 0;
@@ -122,7 +131,7 @@ async fn compare_inner(
             conn.execute_batch("DROP TRIGGER interrupt_replay_stage")
                 .await?;
             interrupted = reopen_execution(interrupted, factory, interrupted_dir.path()).await?;
-            ensure!(!interrupted.recover(&cancelled.signal()).await?);
+            ensure!(!recover(&mut interrupted, &cancelled.signal()).await?);
             ensure!(closure::progress(&conn, height).await? == before);
             failed_replay = true;
         }
@@ -146,7 +155,7 @@ async fn compare_inner(
         if reopen {
             let committed = closure::progress(&conn, height).await?;
             interrupted = reopen_execution(interrupted, factory, interrupted_dir.path()).await?;
-            ensure!(!interrupted.recover(&cancelled.signal()).await?);
+            ensure!(!recover(&mut interrupted, &cancelled.signal()).await?);
             ensure!(closure::progress(&conn, height).await? == committed);
         }
     }
@@ -154,7 +163,7 @@ async fn compare_inner(
         pages > 1 && rollbacks == 1 && replayed == 2 && failed_replay,
         "recovery steps differed: pages={pages}, rollbacks={rollbacks}, replayed={replayed}, failed_replay={failed_replay}"
     );
-    ensure!(interrupted.recover(&Shutdown::new().signal()).await?);
+    ensure!(recover(&mut interrupted, &Shutdown::new().signal()).await?);
     ensure!((interrupted.last_height, interrupted.last_hash) == expected_tip);
     ensure!(completion::completed(&conn, height).await? == expected_closure);
     let actual = full_state(&conn).await?;

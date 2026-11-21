@@ -2,8 +2,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{Duration, Instant};
 
 use crate::api::{
-    Delivery, EngineError, EnginePoll, EngineState, ProposalPartBytes, Publish, ReplyError,
-    ReplyToken, Request, Response,
+    Delivery, EngineError, EnginePoll, EngineState, MetricsSource, ProposalPartBytes, Publish,
+    ReplyError, ReplyToken, Request, Response,
 };
 use crate::channel_bridge::Poll;
 use crate::owner::{Owner, State};
@@ -33,6 +33,12 @@ impl Engine {
 
     pub fn state(&self) -> EngineState {
         self.state
+    }
+
+    pub fn metrics_source(&self) -> MetricsSource {
+        // Collection is deliberately outside guarded(): a diagnostic failure
+        // must not revoke the engine or its signing authority.
+        self.owner.metrics_source()
     }
     pub fn failure(&self) -> Option<&EngineError> {
         self.failure.as_ref()

@@ -22,11 +22,11 @@ use tower_http::{
 use tracing::{Level, Span, error, field, info, span};
 
 use crate::api::handlers::{
-    get_block_transactions, get_blocks, get_contract, get_contract_provenance, get_contracts,
-    get_fees, get_healthz_live, get_healthz_ready, get_index, get_metrics, get_protocol,
-    get_receipt_stream, get_result, get_results, get_signer, get_signer_footprint, get_status,
-    get_transaction, get_transaction_inspect, get_transactions, get_upgrade_state, post_compose,
-    post_contract, post_prepare_upgrade, post_simulate, post_simulate_context,
+    MetricsState, get_block_transactions, get_blocks, get_contract, get_contract_provenance,
+    get_contracts, get_fees, get_healthz_live, get_healthz_ready, get_index, get_metrics,
+    get_protocol, get_receipt_stream, get_result, get_results, get_signer, get_signer_footprint,
+    get_status, get_transaction, get_transaction_inspect, get_transactions, get_upgrade_state,
+    post_compose, post_contract, post_prepare_upgrade, post_simulate, post_simulate_context,
     post_transaction_broadcast, post_transaction_hex_inspect, post_transaction_reconcile,
     post_upgrade,
 };
@@ -132,14 +132,19 @@ fn handle_panic(panic: Box<dyn std::any::Any + Send>) -> axum::response::Respons
 pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
 
-    // Scrape endpoint sits in its own sub-router with PrometheusHandle as
-    // state, merged AFTER `.layer()` and `.with_state()` so GMP scrapes
+    // Scrape endpoint has cached telemetry and recorder state, merged AFTER
+    // `.layer()` and `.with_state()` so GMP scrapes
     // bypass the API's middleware stack (30s timeout, CORS, request-id,
     // catch-panic, trace) — `Router::layer` only applies to routes
     // already in the router at the time of the call.
     let metrics_router = Router::new()
         .route("/metrics", get(get_metrics))
-        .with_state(prom_handle);
+        .with_state(MetricsState {
+            handle: prom_handle,
+            telemetry: context.telemetry.clone(),
+            bitcoin: context.bitcoin.clone(),
+            network: context.config.network,
+        });
 
     // Chain-state-dependent endpoints — gated by the `require_available`
     // middleware below.

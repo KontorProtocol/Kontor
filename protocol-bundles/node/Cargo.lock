@@ -195,7 +195,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-app"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-codec",
  "arc-malachitebft-config",
@@ -223,7 +223,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-app-channel"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-app",
  "arc-malachitebft-config",
@@ -242,7 +242,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-codec"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "bytes",
 ]
@@ -250,7 +250,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-config"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "bytesize",
  "humantime-serde",
@@ -263,7 +263,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-consensus"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-core-driver",
  "arc-malachitebft-core-types",
@@ -283,7 +283,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-driver"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-core-state-machine",
  "arc-malachitebft-core-types",
@@ -296,7 +296,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-state-machine"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-core-types",
  "derive-where",
@@ -306,7 +306,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-types"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-peer",
  "async-trait",
@@ -319,7 +319,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-core-votekeeper"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-core-types",
  "derive-where",
@@ -330,7 +330,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-discovery"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-metrics",
  "either",
@@ -345,7 +345,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-engine"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-codec",
  "arc-malachitebft-config",
@@ -378,7 +378,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-metrics"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-core-state-machine",
  "prometheus-client",
@@ -387,7 +387,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-network"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-discovery",
  "arc-malachitebft-metrics",
@@ -415,7 +415,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-peer"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "bs58",
  "multihash",
@@ -425,7 +425,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-proto"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "prost 0.13.5",
  "prost-types",
@@ -435,7 +435,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-signing"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-core-types",
  "async-trait",
@@ -445,7 +445,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-signing-ed25519"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-core-types",
  "base64 0.22.1",
@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-sync"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "arc-malachitebft-core-types",
  "arc-malachitebft-metrics",
@@ -481,7 +481,7 @@ dependencies = [
 [[package]]
 name = "arc-malachitebft-wal"
 version = "0.9.0-kontor.1"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "advisory-lock",
  "bytes",
@@ -3222,7 +3222,7 @@ dependencies = [
 [[package]]
 name = "if-watch"
 version = "3.2.2"
-source = "git+https://github.com/KontorProtocol/malachite?rev=6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09#6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
+source = "git+https://github.com/KontorProtocol/malachite?rev=9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4#9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4"
 dependencies = [
  "async-io",
  "core-foundation 0.9.4",

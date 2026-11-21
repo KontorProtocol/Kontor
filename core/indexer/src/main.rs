@@ -1,3 +1,6 @@
+#[cfg(not(kontor_consensus_runtime))]
+use indexer::metrics::Telemetry;
+use indexer::metrics::{collection_panicking, recorder_builder};
 use std::io::Write;
 use std::panic;
 #[cfg(feature = "protocol-qualification")]
@@ -275,7 +278,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     // Install the Prometheus recorder before any worker spawns. `metrics::*`
     // macro calls before this silently no-op. Spawn the upkeep tick so
     // histogram buckets don't accumulate stale data.
-    let prom_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+    let prom_handle = recorder_builder()
         .install_recorder()
         .expect("install Prometheus recorder");
     {
@@ -313,6 +316,10 @@ async fn run_daemon(config: Config) -> Result<()> {
     // supervisor's back is what made a crash indistinguishable from a stop.
     let (panic_tx, mut panic_rx) = mpsc::unbounded_channel();
     panic::set_hook(Box::new(move |info| {
+        if collection_panicking() {
+            error!("Metrics collection panicked; invalidating only the diagnostic sample: {info}");
+            return;
+        }
         let message = info
             .payload()
             .downcast_ref::<&str>()
@@ -384,6 +391,15 @@ async fn run_daemon(config: Config) -> Result<()> {
     )
     .await?;
     let reactor_ready = Arc::new(AtomicBool::new(false));
+    #[cfg(kontor_consensus_runtime)]
+    let telemetry = coordinator.telemetry();
+    #[cfg(not(kontor_consensus_runtime))]
+    let telemetry = Telemetry::new();
+    let metrics_telemetry = telemetry.clone();
+    let metrics_shutdown = shutdown.signal();
+    tokio::spawn(async move {
+        metrics_telemetry.collect_engine(metrics_shutdown).await;
+    });
     // Whether we are stopping because something died — see `Env::failed`.
     let failed = Arc::new(AtomicBool::new(false));
     let (consensus_listen_addr_tx, consensus_listen_addr_rx) = tokio::sync::watch::channel(None);
@@ -415,6 +431,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         .expect("new operation owner has one driver");
     let api_handle = api::run(
         Env::new_daemon(DaemonEnv {
+            telemetry: telemetry.clone(),
             config: config.clone(),
             shutdown: shutdown.signal(),
             reactor_ready: reactor_ready.clone(),
@@ -456,6 +473,7 @@ async fn run_daemon(config: Config) -> Result<()> {
 
     let (ready_tx, ready_rx) = oneshot::channel();
     let reactor_handle = reactor::run(
+        telemetry,
         config.starting_block_height,
         shutdown.signal(),
         owner_service.clone(),

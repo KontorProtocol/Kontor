@@ -52,6 +52,12 @@ must use `/healthz/ready`. Older pinned images do not implement this contract;
 do not change their probe path before a compatible image and isolated recovery
 rehearsal pass. This source change alone does not upgrade retained production.
 
+`GET /api/protocol` supplies exact checkpoint and protocol context for comparing
+nodes at a common completed position. `GET /metrics` supplies cached operational
+progress, freshness, and managed consensus metrics. See [Node observations and
+metrics](docs/monitoring.md) for comparison rules, metric semantics, and example
+queries.
+
 ### Install build dependencies:
 
 MacOS:

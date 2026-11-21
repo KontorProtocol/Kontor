@@ -43,6 +43,10 @@ const recovering: ProtocolSnapshot = {
     ordering_era_id: "55".repeat(32),
   },
   canonical: null,
+  observation: {
+    bitcoin_tip: { height: "9007199254740993", hash: "ab".repeat(32) },
+    checkpoint: { height: "9007199254740991", hash: "cd".repeat(32) },
+  },
   installed_protocols: [],
   build: null,
 };
@@ -65,6 +69,10 @@ test("protocol discovery is read-only, keeps exact heights, and preserves recove
   });
   const state = await transport.protocol();
   expect(state).toEqual(recovering);
+  expect(BigInt(state.observation!.bitcoin_tip!.height)).toBe(
+    9007199254740993n,
+  );
+  expect(state.observation!.checkpoint!.hash).toBe("cd".repeat(32));
   expect(
     BigInt(state.certified!.authenticated_height) -
       BigInt(state.certified!.closed_height),

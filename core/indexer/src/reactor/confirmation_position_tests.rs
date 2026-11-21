@@ -5,9 +5,9 @@ use anyhow::{Context, Result};
 use bitcoin::absolute::LockTime;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
-use bitcoin::{Amount, BlockHash, OutPoint, ScriptBuf, Transaction, TxOut, Txid, Witness};
+use bitcoin::{Amount, BlockHash, Network, OutPoint, ScriptBuf, Transaction, TxOut, Txid, Witness};
 use indexer_types::{Inst, InstKind, Insts};
-use libsql::{Connection, Value, params};
+use libsql::{Connection, TransactionBehavior, Value, params};
 use malachitebft_core_types::Round;
 use malachitebft_engine::host::Next;
 use malachitebft_engine::node::NodeRef;
@@ -20,6 +20,7 @@ use super::Reactor;
 use super::certified_fixture;
 use super::execution::ExecutionStep;
 use super::executor::RuntimeExecutor;
+use crate::bitcoin_client::Client;
 use crate::bitcoin_follower::block::BlockInput;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Ctx, Height, Value as ConsensusValue};
@@ -27,13 +28,15 @@ use crate::database::certified_history::{self, closure, reconcile, replay, work}
 use crate::database::confirmation::get_confirmation_position;
 use crate::database::connection::new_connection;
 use crate::database::queries::{
-    executed_wtxid, get_transaction_by_txid, insert_batch, insert_excluded_batch_txids,
-    select_applicable_exclusions, select_decision_exclusions,
+    executed_wtxid, get_checkpoint_latest, get_transaction_by_txid, insert_batch,
+    insert_excluded_batch_txids, select_applicable_exclusions, select_block_latest,
+    select_decision_exclusions,
 };
 use crate::database::receipt_stream::{recovery_boundary, stream_state};
 use crate::protocol::canonical_application::ApplicationSource;
 use crate::protocol::coordinator::application_closure::WorkItem;
 use crate::protocol::coordinator::certified_input::Command;
+use crate::protocol_info::{self, ProtocolAvailability};
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::token::api as token_api;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -169,8 +172,64 @@ async fn finish_decision(
     next: oneshot::Receiver<Next<Ctx>>,
 ) -> Result<Vec<(usize, u64)>> {
     let mut blocks = Vec::new();
+    let bitcoin = Client::new(String::new(), String::new(), String::new())?;
     loop {
-        match reactor.execution.step_certified_closure(height).await? {
+        let step = reactor.execution.step_certified_closure(height).await?;
+        let conn = reactor.db_conn();
+        let read = conn
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await?;
+        let snapshot = protocol_info::snapshot(&read).await?;
+        let complete = matches!(step, ExecutionStep::Complete);
+        assert_eq!(
+            snapshot.availability,
+            if complete {
+                ProtocolAvailability::Ready
+            } else {
+                ProtocolAvailability::Recovering
+            }
+        );
+        let progress = snapshot.certified.unwrap();
+        let metrics = reactor
+            .execution
+            .telemetry
+            .render(&bitcoin, Network::Regtest);
+        assert!(
+            metrics.contains("kontor_state_observation_valid 1\n"),
+            "{metrics}"
+        );
+        assert!(metrics.contains(&format!(
+            "kontor_authenticated_consensus_height {}\n",
+            progress.authenticated_height
+        )));
+        assert!(metrics.contains(&format!(
+            "kontor_closed_consensus_height {}\n",
+            progress.closed_height
+        )));
+        let state = if complete { "ready" } else { "recovering" };
+        assert!(metrics.contains(&format!("kontor_protocol_state{{state=\"{state}\"}} 1\n")));
+        assert_eq!(progress.authenticated_height, height.to_string());
+        assert_eq!(
+            progress.closed_height,
+            if complete { height } else { height - 1 }.to_string()
+        );
+        let observation = snapshot.observation.unwrap();
+        let block = select_block_latest(&read).await?.unwrap();
+        assert_eq!(
+            observation.bitcoin_tip.as_ref().unwrap().hash,
+            block.hash.to_string()
+        );
+        assert_eq!(
+            observation.bitcoin_tip.as_ref().unwrap().height,
+            block.height.to_string()
+        );
+        let checkpoint = get_checkpoint_latest(&read).await?;
+        assert_eq!(
+            observation.checkpoint.map(|c| (c.height, c.hash)),
+            checkpoint.map(|c| (c.height.to_string(), c.hash))
+        );
+        read.commit().await?;
+        match step {
             ExecutionStep::Complete => break,
             ExecutionStep::Block(applied) => {
                 blocks.push((applied.unbatched_count, applied.executed_ops))

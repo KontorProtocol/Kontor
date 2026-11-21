@@ -5,9 +5,9 @@ use indexer_types::CheckpointRow;
 use super::Error;
 
 /// The latest checkpoint at or before `height`. Well-defined for any height
-/// (the trigger only writes a checkpoint where contract state changed), and
-/// immutable once a node has processed past `height` — so it's safe to compare
-/// across nodes regardless of how far each has since advanced.
+/// (the trigger only writes a checkpoint where contract state changed).
+/// Rollback/replay can replace this history; cross-node comparisons must bind it
+/// to the same completed execution position and branch.
 pub async fn get_checkpoint_as_of_height(
     conn: &Connection,
     height: u64,

@@ -73,6 +73,21 @@ report build provenance separately from protocol identity. A `ready` response
 means the reported local history is closed and its protocol is installed. It
 does not prove that the node is at the network tip or authorized to sign.
 
+`observation.bitcoin_tip` and `observation.checkpoint` contain full hashes and
+their actual decimal heights from that same database transaction. A sparse
+checkpoint can be older than the Bitcoin tip. Missing history makes
+`observation` null; missing rows make the corresponding member null. Checkpoints
+can be replaced by rollback and replay.
+
+For cross-node comparison, require `availability === "ready"`, the expected
+`chain_id`, and matching `certified.closed_height`. At that position compare the
+full certified decision, canonical protocol and lineage, Bitcoin tip, and
+checkpoint height and hash. Group by position, never by a hash being checked,
+or divergent nodes would disappear into different groups. Different positions
+mean lag or incomparable samples, not proof of divergence. Recovering and
+unsupported responses are diagnostics only. A missing checkpoint is not a zero
+hash or a successful equality check.
+
 Use `simulateWithContext()` when retaining an execution preview or gas estimate:
 
 ```ts

@@ -398,6 +398,7 @@ impl<E: Executor> Reactor<E> {
                 self.consensus
                     .receive_decision(&self.db_conn(), certificate, reply)
                     .await?;
+                self.execution.telemetry.observe(&self.db_conn()).await;
             }
 
             AppMsg::Finalized {

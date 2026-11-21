@@ -11,7 +11,7 @@ use crate::container::sha256;
 use crate::snapshot::verify_snapshot;
 use crate::symbol_audit::suffix;
 
-pub const MALACHITE_REVISION: &str = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09";
+pub const MALACHITE_REVISION: &str = "9733a8ccbacf0c6bdf16dbb0111cbd34a59aa7a4";
 pub const MALACHITE_VERSION: &str = "0.9.0-kontor.1";
 pub const WASMTIME_REVISION: &str = "e758ad63ef0913c8e75bcdba16acbfa37a01eddd";
 pub const WASMTIME_VERSION: &str = "51.0.0-kontor.2";

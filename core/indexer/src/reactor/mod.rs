@@ -88,7 +88,7 @@ use crate::consensus::Ctx;
 #[cfg(test)]
 use crate::database::canonical_history;
 use crate::database::certified_history;
-use crate::metrics::PENDING_BLOCKS;
+use crate::metrics::{PENDING_BLOCKS, Telemetry};
 use crate::protocol::coordinator::bootstrap;
 #[cfg(test)]
 use crate::protocol::coordinator::committee::build_validator_set;
@@ -430,6 +430,7 @@ impl<E: Executor> Reactor<E> {
         fee_publish_ticker.tick().await; // consume the immediate first tick
 
         loop {
+            self.execution.telemetry.heartbeat();
             if let Some(status) = &self.runtime_status {
                 let next = Some(RuntimeStatus {
                     authority: self.consensus.engine.authority(),
@@ -1026,6 +1027,7 @@ async fn consensus_from_engine(
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
+    telemetry: Telemetry,
     starting_block_height: u64,
     shutdown: ShutdownSignal,
     owner_service: OwnerService,
@@ -1068,9 +1070,14 @@ pub fn run(
                     .context("startup lacks certified protocol context")?;
                 let mut execution = ExecutionContext::new(exec, session, network,
                     owner_service.clone(), context, prune, last_height, last_hash);
+                execution.telemetry = telemetry.clone();
+                telemetry.observe(&execution.session.conn).await;
+                let recovery_started = Instant::now();
                 if !execution.recover(&shutdown).await? {
                     return Ok(());
                 }
+                telemetry.observe(&execution.session.conn).await;
+                telemetry.recovery_complete(recovery_started);
 
                 // Existing databases need a one-time conversion before pruning.
                 if prune.enabled {

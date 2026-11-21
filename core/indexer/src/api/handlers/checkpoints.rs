@@ -5,8 +5,8 @@ use crate::api::{Env, error::HttpError, result::Result};
 use crate::database::queries::get_checkpoint_as_of_height;
 
 /// Return the checkpoint as of `height` (the latest checkpoint at or before it).
-/// Comparing this across nodes at a fixed past height is race-free, since a past
-/// checkpoint is immutable once a node has processed beyond it.
+/// Rollback and replay can replace past checkpoints. Compare nodes through
+/// `/api/protocol`, which binds the checkpoint to its completed execution context.
 pub async fn get_checkpoint(
     State(env): State<Env>,
     Path(height): Path<u64>,

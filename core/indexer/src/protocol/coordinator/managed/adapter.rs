@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use kontor_consensus_first::Engine;
+use kontor_consensus_first::api::MetricsSource;
 
 use super::types::{
     Delivery, EngineError, EnginePoll, EngineState, ProposalPartBytes, Publish, PublishError,
@@ -10,6 +11,10 @@ use super::types::{
 pub(crate) struct RuntimeEngine(pub(super) Engine);
 
 impl RuntimeEngine {
+    pub(crate) fn metrics_source(&self) -> MetricsSource {
+        self.0.metrics_source()
+    }
+
     pub(crate) fn state(&self) -> EngineState {
         self.0.state()
     }

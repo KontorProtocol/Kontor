@@ -30,6 +30,7 @@ use crate::config::Config;
 use crate::database::Reader;
 use crate::event::EventSubscriber;
 use crate::info::{compute_info_core, run_info_publisher};
+use crate::metrics::Telemetry;
 use crate::reactor::Simulation;
 use crate::reactor::status::{EngineAuthority, RuntimeStatus};
 use crate::runtime::ownership::OwnerService;
@@ -93,6 +94,7 @@ fn bitcoin_fixture() -> MockBitcoinRpc {
 
 impl Services {
     pub(super) async fn start(
+        telemetry: Telemetry,
         config: Config,
         reader: Reader,
         service: OwnerService,
@@ -127,6 +129,7 @@ impl Services {
         let (fees, fees_rx) = watch::channel(Fees::floor(1));
         let (runtime_status, runtime_status_rx) = watch::channel(None);
         let env = Env::new_daemon(DaemonEnv {
+            telemetry,
             config,
             shutdown: shutdown.signal(),
             reader: reader.clone(),
@@ -176,14 +179,23 @@ impl Services {
         let signal = shutdown.signal();
         let traffic = tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    biased;
-                    _ = signal.cancelled() => return Ok(()),
-                    result = probe.get(format!("http://{address}/healthz/live")).send() => {
-                        result?.error_for_status()?;
-                        count.fetch_add(1, Ordering::Relaxed);
+                for path in ["/healthz/live", "/metrics"] {
+                    tokio::select! {
+                        biased;
+                        _ = signal.cancelled() => return Ok(()),
+                        result = async {
+                            let body = probe.get(format!("http://{address}{path}"))
+                                .send().await?.error_for_status()?.text().await?;
+                            ensure!(body.len() < 2 * 1024 * 1024);
+                            if path == "/metrics" {
+                                ensure!(body.contains("kontor_engine_metrics_available"));
+                                ensure!(!body.contains("# EOF"));
+                            }
+                            Ok::<_, Error>(())
+                        } => { result?; }
                     }
                 }
+                count.fetch_add(1, Ordering::Relaxed);
                 tokio::select! {
                     biased;
                     _ = signal.cancelled() => return Ok(()),
@@ -299,6 +311,32 @@ impl Services {
             .json::<DiagnosticResponse>()
             .await?
             .result)
+    }
+
+    pub(super) async fn metrics(&self) -> Result<String> {
+        let response = self
+            .http
+            .get(format!("http://{}/metrics", self.address))
+            .send()
+            .await?
+            .error_for_status()?;
+        ensure!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                == Some("text/plain; version=0.0.4; charset=utf-8")
+        );
+        let text = response.text().await?;
+        ensure!(
+            text.len() < 2 * 1024 * 1024,
+            "combined metrics exceed qualification size limit"
+        );
+        ensure!(
+            !text.contains("# EOF"),
+            "OpenMetrics terminator in Prometheus response"
+        );
+        Ok(text)
     }
 
     pub(super) async fn simulate(&self, raw: &[u8]) -> Result<Value> {
