@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use toml::Value as TomlValue;
 
 use super::{
     CELLS, SmokeArgs, TESTS, capture_with_environment, validate_report, validate_set, validate_test,
@@ -94,6 +95,45 @@ fn one_fixture(directory: &Path) -> Value {
         "x86_64-unknown-linux-gnu",
         "/target/debug/deps/indexer-fixture",
     )
+}
+
+#[test]
+fn cargo_provenance_accepts_current_workspace_pin_and_rejects_previous_revision() {
+    let temp = TempDir::new().unwrap();
+    let dir = temp.path();
+    let report = one_fixture(dir);
+    let lock: TomlValue = toml::from_str(include_str!("../../../../Cargo.lock")).unwrap();
+    let packages = lock["package"].as_array().unwrap();
+    let wasmtime: Vec<_> = packages
+        .iter()
+        .filter(|package| package["name"].as_str() == Some("wasmtime"))
+        .collect();
+    assert_eq!(wasmtime.len(), 1);
+    let package = wasmtime[0];
+    let source = package["source"].as_str().unwrap();
+    let version = package["version"].as_str().unwrap();
+    let source = source.rsplit_once('#').unwrap().0;
+    let mut cargo: Vec<Value> = fs::read_to_string(dir.join("cargo.json"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let binary = report["binary"].as_str().unwrap();
+    for suffix in [format!("wasmtime@{version}"), version.to_owned()] {
+        cargo[1]["package_id"] = json!(format!("{source}#{suffix}"));
+        write_cargo(dir, &cargo);
+        build::validate(&report, dir, binary).unwrap();
+    }
+    cargo[1]["package_id"] = json!(format!(
+        "git+https://github.com/wilfreddenton/wasmtime?rev=0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7#wasmtime@{version}"
+    ));
+    write_cargo(dir, &cargo);
+    assert!(
+        build::validate(&report, dir, binary)
+            .unwrap_err()
+            .to_string()
+            .contains("compiled Wasmtime package identity mismatch")
+    );
 }
 
 #[test]

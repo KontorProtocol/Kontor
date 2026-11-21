@@ -18,6 +18,7 @@ use super::probes::{CASES, number, reports};
 use super::test_group::{self, OWNERSHIP_TESTS};
 use super::{REPORT_PREFIX, parse_sweep, smoke, validate_pair};
 use crate::container::sha256;
+use crate::recipes::WASMTIME_VERSION;
 use crate::toolchain::{Environment, output as command_output};
 use crate::write_json;
 
@@ -325,7 +326,7 @@ fn capture_with_environment(
         .collect();
     ensure!(
         wasmtime.len() == 1
-            && wasmtime[0].get("version").and_then(TomlValue::as_str) == Some("51.0.0-kontor.2")
+            && wasmtime[0].get("version").and_then(TomlValue::as_str) == Some(WASMTIME_VERSION)
             && wasmtime[0]
                 .get("source")
                 .and_then(TomlValue::as_str)

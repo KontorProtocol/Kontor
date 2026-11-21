@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
+pub(super) use crate::recipes::WASMTIME_REVISION as FORK_REVISION;
+use crate::recipes::WASMTIME_VERSION;
 use crate::toolchain::{Environment, output as command_output};
 
-pub(super) const FORK_REVISION: &str = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7";
 pub(super) const FEATURE_LOGS: [(&str, &str); 2] = [
     ("production", "wasmtime-production-features.txt"),
     ("qualification", "wasmtime-qualification-features.txt"),
@@ -104,8 +105,8 @@ pub(super) fn validate(report: &Value, directory: &Path, binary: &str) -> Result
                 let prefix =
                     format!("git+https://github.com/wilfreddenton/wasmtime?rev={FORK_REVISION}#");
                 ensure!(
-                    item["package_id"] == prefix.clone() + "wasmtime@51.0.0-kontor.2"
-                        || item["package_id"] == prefix + "51.0.0-kontor.2",
+                    item["package_id"] == format!("{prefix}wasmtime@{WASMTIME_VERSION}")
+                        || item["package_id"] == format!("{prefix}{WASMTIME_VERSION}"),
                     "compiled Wasmtime package identity mismatch"
                 );
                 let features = item["features"]
