@@ -109,6 +109,7 @@ impl Fixture {
             malachite_engine: false,
             source_root: ".".into(),
             source_snapshot: None,
+            explicit_wasmtime_namespace: false,
         };
         let data = json!({"workspace_root":manifest.parent(),"packages":[{"id":"fixture","name":"fixture","version":"1.0.0","manifest_path":manifest,"source":null}],"resolve":{"root":"fixture","nodes":[{"id":"fixture","features":[],"deps":[]}]}});
         let metadata = file(root, "metadata.json", &serde_json::to_string(&data)?)?;

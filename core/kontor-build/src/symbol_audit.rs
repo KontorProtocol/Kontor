@@ -90,6 +90,19 @@ fn empty_identity() -> Value {
     json!({})
 }
 impl Graph {
+    fn owns_private_native(&self, name: &str) -> bool {
+        name.starts_with(&format!("{}_", self.namespace))
+            || (self.identity["wasmtime_native_symbols"] == "namespace"
+                && name.starts_with("wasmtime_")
+                && name.ends_with(&format!("_{}", self.namespace)))
+    }
+    fn wasmtime_suffix(&self, version: &str) -> Result<String> {
+        match self.identity.get("wasmtime_native_symbols") {
+            None => Ok(suffix(version)),
+            Some(value) if value == "namespace" => Ok(self.namespace.clone()),
+            _ => bail!("unknown Wasmtime native symbol mode"),
+        }
+    }
     fn artifacts(&self) -> Result<impl Iterator<Item = &Artifact>> {
         Ok(self
             .artifacts
@@ -285,10 +298,13 @@ impl Audit<'_> {
             !ALLOCATOR.is_match(name),
             "bundle defines process allocator: {name}"
         );
+        let wasmtime = version
+            .map(|version| graph.wasmtime_suffix(version))
+            .transpose()?;
         if RUST.is_match(name)
             || ANONYMOUS.is_match(name)
-            || version.is_some_and(|version| {
-                name.starts_with("wasmtime_") && name.ends_with(&format!("_{}", suffix(version)))
+            || wasmtime.is_some_and(|suffix| {
+                name.starts_with("wasmtime_") && name.ends_with(&format!("_{suffix}"))
             })
             || name.starts_with(&format!("{}_", graph.namespace))
         {
@@ -355,7 +371,6 @@ impl Audit<'_> {
         let mut sets = Vec::new();
         let mut inventories = Vec::new();
         for graph in graphs {
-            let prefix = format!("{}_", graph.namespace);
             let mut expected = BTreeMap::new();
             for item in graph.artifacts()? {
                 if let Some(previous) = expected.insert(&item.path, &item.sha256) {
@@ -380,7 +395,9 @@ impl Audit<'_> {
                     .inspector
                     .definitions(path, false)?
                     .into_iter()
-                    .filter(|(name, _)| name.starts_with(&prefix) && !globals.contains_key(name))
+                    .filter(|(name, _)| {
+                        graph.owns_private_native(name) && !globals.contains_key(name)
+                    })
                     .collect();
                 names.extend(local.keys().cloned());
                 inputs.push(json!({"path": path, "sha256": hash, "definitions": local}));
@@ -424,11 +441,14 @@ impl Audit<'_> {
             );
             versions.push(resolved.first().map(|p| p.version.clone()));
         }
-        let vm: Vec<_> = versions.iter().flatten().collect();
+        let vm: Vec<_> = graphs
+            .iter()
+            .zip(&versions)
+            .filter_map(|(graph, version)| version.as_ref().map(|v| graph.wasmtime_suffix(v)))
+            .collect::<Result<_>>()?;
         ensure!(
-            vm.iter().collect::<BTreeSet<_>>().len() == vm.len()
-                && vm.iter().map(|v| suffix(v)).collect::<BTreeSet<_>>().len() == vm.len(),
-            "independent Wasmtime graphs must have unique versions and native prefixes"
+            vm.iter().collect::<BTreeSet<_>>().len() == vm.len(),
+            "independent Wasmtime graphs must have unique versions or explicit native namespaces"
         );
         let mut sets = Vec::<Names>::new();
         let mut inventory = Vec::new();
@@ -522,14 +542,14 @@ impl Audit<'_> {
             .zip(versions)
             .filter_map(|((graph, names), version)| {
                 version.as_ref().map(|version| {
-                    (
+                    Ok((
                         graph,
                         names,
-                        format!("wasmtime_libunwind_{}", suffix(version)),
-                    )
+                        format!("wasmtime_libunwind_{}", graph.wasmtime_suffix(version)?),
+                    ))
                 })
             })
-            .collect();
+            .collect::<Result<_>>()?;
         let crypto: Vec<_> = graphs
             .iter()
             .flat_map(|graph| {
@@ -573,10 +593,9 @@ impl Audit<'_> {
             local_inventory = Some(inventory);
             let mut addresses = Vec::<BTreeSet<String>>::new();
             for ((graph, names), private) in graphs.iter().zip(sets).zip(locals) {
-                let prefix = format!("{}_", graph.namespace);
                 let current: Definitions = local
                     .iter()
-                    .filter(|(n, _)| n.starts_with(&prefix))
+                    .filter(|(n, _)| graph.owns_private_native(n))
                     .map(|(n, v)| (n.clone(), v.clone()))
                     .collect();
                 let unowned: Vec<_> = current

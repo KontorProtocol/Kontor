@@ -53,6 +53,19 @@ fn prelaunch_executors_share_sources_without_changing_historical_fixtures() -> R
     );
     assert_eq!(proof_graphs()["second"].lift_rate, 513);
     assert_eq!(current_executors()["second"].lift_rate, 512);
+    assert_eq!(managed["first"].revision, managed["observer"].revision);
+    assert_eq!(managed["first"].version, managed["observer"].version);
+    assert!(
+        managed
+            .values()
+            .all(|graph| graph.explicit_wasmtime_namespace)
+    );
+    assert!(
+        legacy
+            .values()
+            .all(|graph| !graph.explicit_wasmtime_namespace)
+    );
+    assert_ne!(legacy["first"].revision, legacy["second"].revision);
     Ok(())
 }
 
@@ -178,6 +191,12 @@ fn current_recipe_inputs_preserve_executor_and_proof_identity_separation() -> Re
     assert!(verify_identity(&root, &report, &proof).is_err());
     let mut mixed = proof;
     mixed.insert("executor".into(), executor["first"].clone());
+    verify_reservations(&root, &mixed)?;
+    // Sharing a version with a proof is safe only with explicit native isolation.
+    mixed
+        .get_mut("executor")
+        .unwrap()
+        .explicit_wasmtime_namespace = false;
     assert!(verify_reservations(&root, &mixed).is_err());
     Ok(())
 }
