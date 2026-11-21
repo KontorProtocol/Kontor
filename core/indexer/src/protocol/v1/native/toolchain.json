@@ -2,9 +2,9 @@
   "platform": "linux/arm64",
   "image": "docker.io/kontorprotocol/kontor-build@sha256:53f2be7d48a15f8fa92e1f9decdb514671ece3c7cfe26849f00383b60385ee39",
   "node": {
-    "version": "24.22.1",
-    "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-arm64.tar.gz",
-    "sha256": "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3"
+    "version": "24.22.3",
+    "url": "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-arm64.tar.gz",
+    "sha256": "261af2af250dfd7e9f25cf151d1b2713a0adf8f10a9ad116c4947f68627affe8"
   },
   "wasm_tools": {
     "version": "1.262.0",

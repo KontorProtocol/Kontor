@@ -102,13 +102,15 @@ are missing.
 - **`uniffi-bindgen-react-native` is an npm package, not a cargo crate.** It ships
   the `ubrn` CLI. `cargo install uniffi-bindgen-react-native` does NOT work.
 - **Version must match the `uniffi` crate.** `core/kontor-sdk-native` pins
-  `uniffi = "0.31.2"`, so this package pins `ubrn` `0.31.0-6`. If you bump one,
-  bump the other in lockstep (all published `ubrn` versions are `-N` prereleases).
+  `uniffi = "0.31.2"` and this package pins `ubrn` `0.31.0-7`, which share the
+  UniFFI 0.31 metadata ABI. Recheck ABI compatibility and regenerate bindings
+  when either changes. The generator's `-N` release suffix is independent of
+  the Rust crate's patch version.
 - **Run `ubrn` from an interactive terminal.** In a headless / non-TTY context
   (background job, some CI shells) the CLI can hang with no output on first run.
   Locally, run it directly in your shell; in CI, allocate a TTY if needed.
-- **Node LTS.** Use Node 20 or 22 (`nvm use 22`), not bleeding-edge (25+).
-- **clap debug_assert.** ubrn 0.31.0-6's cli.cjs runs `cargo run` (debug), and with
+- **Node LTS.** Use the Node 24 version pinned in `tools/build.json` for builds and CI.
+- **clap debug_assert.** ubrn 0.31.0-7's cli.cjs runs `cargo run` (debug), and with
   clap 4.6 that panics on a `#[clap(long, default_value = "false")]`-on-bool arg
   (`Argument 'native_bindings' is positional ... but action is SetTrue`). The npm
   scripts prepend `CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false` to disable dev

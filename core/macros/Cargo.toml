@@ -20,7 +20,7 @@ wit-parser = { workspace = true }
 wit-validator = { path = "../wit-validator" }
 anyhow = { workspace = true }
 
-syn = {version = "=3.0.9", features = ["full"]}
+syn = {version = "=3.0.10", features = ["full"]}
 quote = "=1.0.47"
 proc-macro2 = "=1.0.107"
 darling = "=0.24.1"

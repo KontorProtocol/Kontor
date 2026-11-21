@@ -13,7 +13,7 @@ use crate::symbol_audit::suffix;
 
 pub const MALACHITE_REVISION: &str = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09";
 pub const MALACHITE_VERSION: &str = "0.9.0-kontor.1";
-pub const WASMTIME_REVISION: &str = "f93faf7bc720cd84dd9f949a65db769ff1710bd1";
+pub const WASMTIME_REVISION: &str = "e758ad63ef0913c8e75bcdba16acbfa37a01eddd";
 pub const WASMTIME_VERSION: &str = "51.0.0-kontor.2";
 const K3_SNAPSHOT: &str = "d9d80e4af271ff122aea598778b2f36d0a2d170ffa86ff32a9f42a6328a01c09";
 const HISTORICAL: &[(&str, &str, &str)] = &[

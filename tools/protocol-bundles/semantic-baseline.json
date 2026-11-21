@@ -1,9 +1,9 @@
 {
-  "capture_source": "bc0a92726caf57f7db69ec47d545e20ba4dc7715",
+  "capture_source": "2112dc95ed298b3009c438f77900756a57c29af7",
   "inputs": {
-    "counter_sha256": "d7a4bf43e542718064bddd8d89b1805d35643129d0beb8f5ca49c6ca7b0e7b49",
+    "counter_sha256": "82b25b538f2a6e425ef0250fec5c1f0ec30384a14fc3ce8d774f541d3ac2d898",
     "proxy_sha256": "b3300f2d76ab9de4d20ea2041a3025a02d16c311db438934111ac383fc482306",
-    "raw_sha256": "45d6defa053cd65b7cda68e741662750604d24de663077be7d6629e1caaa231b"
+    "raw_sha256": "45e4be82317eb4b7fc4b611ca0544f004e7503b1c22b19f19e216be1b780ce97"
   },
   "observations": {
     "active_set": {
@@ -36,7 +36,7 @@
       ],
       "contract_provenance": [
         5,
-        "f61901e2396f01fa98e07ebf6319b3961eead40696d85dd3326ae6f4412c2936"
+        "ecc0aed8e20efbf1e44b547415294208c50585f99ac2f6826ebd380fa872f787"
       ],
       "contract_results": [
         8,
@@ -48,7 +48,7 @@
       ],
       "contracts": [
         5,
-        "e5a921d2437484bfa272dcc2cdabbe1c041a28d26a91cf2557ace075efd47588"
+        "8d634985d11bd2c7900fae06e3545501bb68c239e0303c296417b2f3f899ef02"
       ],
       "current_contract_state": [
         42,
@@ -82,7 +82,7 @@
     "lifecycle": {
       "block_execution_usage": [
         1,
-        "2da426c4c409590612402c66b0638348c7743489be09219519be30a8fa6ea8e5"
+        "000dfc2a1e19d93ea6afddfeec87774d029687acf53a962f5d8cc1f921114c55"
       ],
       "blocks": [
         3,
@@ -94,7 +94,7 @@
       ],
       "contract_provenance": [
         5,
-        "f61901e2396f01fa98e07ebf6319b3961eead40696d85dd3326ae6f4412c2936"
+        "ecc0aed8e20efbf1e44b547415294208c50585f99ac2f6826ebd380fa872f787"
       ],
       "contract_results": [
         18,
@@ -106,7 +106,7 @@
       ],
       "contracts": [
         5,
-        "e5a921d2437484bfa272dcc2cdabbe1c041a28d26a91cf2557ace075efd47588"
+        "8d634985d11bd2c7900fae06e3545501bb68c239e0303c296417b2f3f899ef02"
       ],
       "current_contract_state": [
         43,
@@ -174,7 +174,7 @@
       "state": {
         "block_execution_usage": [
           1,
-          "2da426c4c409590612402c66b0638348c7743489be09219519be30a8fa6ea8e5"
+          "000dfc2a1e19d93ea6afddfeec87774d029687acf53a962f5d8cc1f921114c55"
         ],
         "blocks": [
           4,
@@ -186,7 +186,7 @@
         ],
         "contract_provenance": [
           7,
-          "7dcdcb51189edb488260d6672a255344810cbde16eef5021ec238de5814453e5"
+          "34fb85ca537d5273e9d2045a44a871c632f434f8ae2c884f39d2a5936643c804"
         ],
         "contract_results": [
           28,
@@ -198,7 +198,7 @@
         ],
         "contracts": [
           7,
-          "c66a2065a28ab0274c97ec81d4bce45a531af867e42fdce732570f7cd671625c"
+          "c1ea37af91f7515048458f88ca65ca4f775f347f75cf8da28617827303b625f2"
         ],
         "current_contract_state": [
           53,
@@ -237,26 +237,26 @@
     }
   },
   "provenance": {
-    "binary_sha256": "1aec918be9776fed9ff44bd0ad2fdd6ac06f7ea0378e9731440953acc1e85129",
+    "binary_sha256": "643ab97ae42e2ca4318095f82ce38f817a5bf09fa53122b794219bc14ee3511e",
     "cases": 25,
     "command": "./tools/kontor qualify-node --output /home/wilfred/Documents/Kontor/.build-cache/local-shared/slot-1/protocol --profile release --offline --link-set managed-node (qualify-executors capture)",
     "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: aarch64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5\n",
-    "core_lock_sha256": "69f37f4a3bea6daa8ddfdf00e7a27bb9e9ab5252c89c04e5876867bd65cd5603",
+    "core_lock_sha256": "828f5207bd5b2f4f3fbb4738584db81ce947281470d16ea1c6cc9e122fae5a7e",
     "fixture_sources": {
       "core/indexer/src/protocol_qualification/fixture.rs": "0fa00789954d8c7eceaffbb3fee1d82814f1f8d3002405794685e5e7a064e824"
     },
     "link_set": "managed-node",
-    "log_sha256": "447e9bdc9857ad55cce18a3fd52413ce19a213918b3567e7bdcfd614823e9a26",
+    "log_sha256": "17bb7a36d75b3e80bc2c2d2aea43da6d5cb69084661ea34a439bc3cd8f404f59",
     "network": "local loopback available; no external service",
-    "node_build_report_sha256": "957e95b856771c8364e69e92ef226a64e3d30efad1742546bd19939e0c765b9c",
-    "node_lock_sha256": "0e4dce096ee5451a7760819c553fd780338fb8153a7bb33c67b271dc34fa003c",
-    "node_source_inputs_sha256": "6ce022b2ae1510970d46ae09c6b90439d60df758b7e7f6985f323a3ee9d08c31",
+    "node_build_report_sha256": "f3bde931376e38bcfb06ad9e73810d71de7d87c55d282a0cac553244dfcb995e",
+    "node_lock_sha256": "615314c887f9d3dbde59661b818400239df7d07297b1bffd8de25868c0cd21f0",
+    "node_source_inputs_sha256": "134a9b7177aa54c633c40265d21a97350c7152540f2f115d40449e031839061f",
     "profile": "release",
-    "stderr_sha256": "542417dfc6dd97b137ec3deeaa8a7dda23106ae123d0d8be763300a7852ea784",
-    "stdout_sha256": "447e9bdc9857ad55cce18a3fd52413ce19a213918b3567e7bdcfd614823e9a26",
+    "stderr_sha256": "4acf2bfc59288b76a5358ad1e7077fb63617e8f4a9ffb0a46907eed54e67ae52",
+    "stdout_sha256": "17bb7a36d75b3e80bc2c2d2aea43da6d5cb69084661ea34a439bc3cd8f404f59",
     "target": "aarch64-unknown-linux-gnu",
-    "tmpdir": "/home/wilfred/Documents/Kontor/rust-1-100-evidence/tmp",
-    "working_directory": "/home/wilfred/Documents/Kontor/rust-1-100"
+    "tmpdir": "/home/wilfred/Documents/Kontor/dependency-upgrade-evidence/tmp",
+    "working_directory": "/home/wilfred/Documents/Kontor/dependency-upgrades"
   },
   "schema": 2
 }

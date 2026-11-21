@@ -2,9 +2,11 @@ use std::char::{CharTryFromError, DecodeUtf16Error, decode_utf16};
 use std::str::{Utf8Error, from_utf8};
 
 use anyhow::{Result, anyhow};
+use indexer_types::OpStatus;
 use wasmtime::component::{Access, Component, ComponentType, Lift, Linker, Val};
-use wasmtime::{Error, OutOfMemory};
+use wasmtime::{Error, OutOfMemory, Trap};
 
+use crate::protocol::v1::errors::classify_result;
 use crate::runtime::{ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
 
@@ -68,6 +70,10 @@ async fn actual_wasmtime_conversion_errors_match_the_compatibility_adapter() -> 
             match expected {
                 "utf8" => assert!(error.root_cause().is::<Utf8Error>()),
                 "utf16" => assert!(error.root_cause().is::<DecodeUtf16Error>()),
+                ALLOCATION_ERROR => assert_eq!(
+                    error.downcast_ref::<Trap>(),
+                    Some(&Trap::HostcallFuelExhausted)
+                ),
                 message => assert_eq!(error.root_cause().to_string(), message),
             }
             let classified = Runtime::decode_result(
@@ -81,6 +87,9 @@ async fn actual_wasmtime_conversion_errors_match_the_compatibility_adapter() -> 
                 matches!(classified, Err(ExecutionError::Deterministic(_))),
                 "{expected}: {classified:?}"
             );
+            if expected == ALLOCATION_ERROR {
+                assert_eq!(classify_result(&classified), OpStatus::Trap);
+            }
         }
     }
     Ok(())
@@ -468,6 +477,8 @@ async fn generated_host_errors_cannot_impersonate_conversion_failures() -> Resul
 async fn unknown_engine_errors_and_near_matches_remain_infrastructure_failures() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let mut errors = vec![
+        Error::msg(ALLOCATION_ERROR),
+        Error::msg(format!("wasm trap: {ALLOCATION_ERROR}")),
         Error::msg("unknown engine failure"),
         Error::msg("discriminant 1 out of range [0..2)"),
         Error::msg("discriminant 02 out of range [0..2)"),

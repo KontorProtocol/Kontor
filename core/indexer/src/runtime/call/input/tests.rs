@@ -52,6 +52,7 @@ async fn bounded_builder_matches_standard_wave_semantics() -> Result<()> {
                 "{b: some(\"é\\n\"), a: 2}",
                 "{a: 1, a: 2}",
                 "{a: 1, extra: false}",
+                "{extra: false, a: 1, b: none}",
                 "{:}",
             ],
         ),
@@ -75,6 +76,7 @@ async fn bounded_builder_matches_standard_wave_semantics() -> Result<()> {
             "(flags \"one\" \"two\")",
             vec!["{}", "{two, one}", "{one, one}", "{three}"],
         ),
+        ("(flags \"z\" \"a\")", vec!["{a, z}", "{z, a}", "{a, a, z}"]),
         (
             "(option (option u32))",
             vec!["none", "some(none)", "some(some(3))", "3"],
@@ -106,6 +108,29 @@ async fn bounded_builder_matches_standard_wave_semantics() -> Result<()> {
                     panic!("{definition}: {source}: stock={stock:?}, bounded={bounded:?}")
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_record_fields_match_standard_wave_semantics() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let ty = ty_with_definitions(
+        &runtime,
+        r#"(type $inner (record (field "a" u32)))
+            (export $record "inner" (type $inner))"#,
+        r#"(record (field "inner" $record))"#,
+    )?;
+    for source in ["{inner: {a: 1}}", "{inner: {a: 1, extra: false}}"] {
+        let expression = format!("f({source})");
+        let call = UntypedFuncCall::parse(&expression)?;
+        let stock = call.to_wasm_params::<Val>([&ty]);
+        let mut store = runtime.make_store(1_000_000)?;
+        let bounded = parse(&mut store, &ty, source);
+        assert_eq!(stock.is_ok(), bounded.is_ok(), "{source}");
+        if let Ok(stock) = stock {
+            assert_eq!(bounded?, stock, "{source}");
         }
     }
     Ok(())

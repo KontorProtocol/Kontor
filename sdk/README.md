@@ -274,3 +274,18 @@ Bitcoin observations, including confirmed transactions when Bitcoin Core has
 unknown. No compatibility fallback to the old `{ txid }` relay response is provided.
 Immediately after confirmation, txindex may briefly lag; reconcile again rather
 than treating that temporary unknown result as nonpublication.
+
+## Dependency maintenance
+
+Builds and CI use the Node 24 release pinned in `tools/build.json`. This build
+pin does not impose a new runtime requirement on applications using the SDK.
+
+The development toolchain currently retains JCO 1.39.0 and its transitive
+`minimatch` 10.2.6 advisory
+[GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249).
+The reviewed JCO 1.42.0 release still selects the affected dependency. This is
+an unresolved build-tool advisory, not a patched dependency or an audit ignore.
+Revisit it when JCO selects a fixed version, then regenerate the component and
+validate its bindings. Do not apply npm's suggested JCO downgrade or a forced
+override without checking generator compatibility. Production-only and full
+development audits must be reported separately.

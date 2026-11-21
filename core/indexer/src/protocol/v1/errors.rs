@@ -88,8 +88,7 @@ pub(crate) fn is_deterministic(error: &WasmtimeError) -> bool {
     let message = cause.to_string();
     matches!(
         message.as_str(),
-        "too much data is being copied between the host and the guest: fuel allocated for hostcalls has been exhausted"
-            | "borrow handles still remain at the end of the call"
+        "borrow handles still remain at the end of the call"
             | "string pointer/length out of bounds of memory"
             | "string pointer not aligned to 2"
             | "list pointer/length out of bounds of memory"
