@@ -21,7 +21,7 @@
   "image": "docker.io/kontorprotocol/kontor-build@sha256:53f2be7d48a15f8fa92e1f9decdb514671ece3c7cfe26849f00383b60385ee39",
   "jco": "1.39.0",
   "node": "v24.22.3",
-  "npm_lock_sha256": "39e235f636e6ef35f4677c5be1b8d7fa4903a3d2232ca6eeb28745082c5d86df",
+  "npm_lock_sha256": "4ed06b9ba0d678f3fb94440c7548a646dd7b88f86cb5445d533913b293751564",
   "platform": "linux/arm64",
   "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
   "wasm_opt": "wasm-opt version 133 (version_133)",
