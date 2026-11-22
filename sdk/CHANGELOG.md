@@ -1,6 +1,6 @@
 # SDK changes
 
-## Unreleased
+## 0.3.0-rc.8
 
 The Signet API default is now `https://signet.kontor.network:35000/api`,
 matching the deployed public endpoint.
