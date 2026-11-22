@@ -33,13 +33,13 @@ use crate::{
 };
 use anyhow::{Result, anyhow, bail};
 use bitcoin::{
-    Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, TapSighashType,
-    Transaction, TxIn, TxOut, Txid, XOnlyPublicKey,
+    Address, Amount, BlockHash, Network, OutPoint, TapSighashType, Transaction, TxIn, TxOut, Txid,
+    XOnlyPublicKey,
     absolute::LockTime,
     bip32::{DerivationPath, Xpriv},
     consensus::serialize as serialize_tx,
     key::rand::{Rng, RngCore},
-    key::{Keypair, PrivateKey, Secp256k1, rand},
+    key::{Keypair, Secp256k1, rand},
     taproot::TaprootBuilder,
     transaction::Version,
 };
@@ -414,15 +414,6 @@ impl Identity {
     pub fn x_only_public_key(&self) -> XOnlyPublicKey {
         self.keypair.x_only_public_key().0
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct P2wpkhIdentity {
-    pub address: Address,
-    pub compressed_public_key: CompressedPublicKey,
-    pub private_key: PrivateKey,
-    pub keypair: Keypair,
-    pub next_funding_utxo: (OutPoint, TxOut),
 }
 
 pub struct PublishedContract {
@@ -1050,11 +1041,6 @@ impl RegTester {
 
     pub async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
         self.inner.lock().await.wit(contract_address).await
-    }
-
-    // TODO: reimplement for compose tests — needs admin identity for funding
-    pub async fn identity_p2wpkh(&mut self) -> Result<P2wpkhIdentity> {
-        bail!("identity_p2wpkh not available on module RegTester — use cluster method")
     }
 
     pub async fn fund_address(

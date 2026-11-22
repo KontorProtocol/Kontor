@@ -259,6 +259,13 @@ fn qualification_scopes_follow_separate_execution_boundaries() {
     for (path, stack, bundles) in cases {
         assert_eq!(stack_relevant(path), stack, "stack: {path}");
         assert_eq!(bundle_relevant(path), bundles, "bundles: {path}");
+        if bundles {
+            let jobs = classify(path, &BTreeSet::new());
+            assert!(
+                jobs.contains("rust") || jobs.contains("tooling"),
+                "missing CI tooling checks: {path}"
+            );
+        }
     }
     for path in [
         "core/indexer/src/runtime/pricing.rs",
@@ -694,6 +701,13 @@ fn dependency_paths_follow_build_boundaries_without_package_lists() {
     ] {
         assert_eq!(stack_relevant(path), stack, "stack: {path}");
         assert_eq!(bundle_relevant(path), bundles, "bundles: {path}");
+        if bundles {
+            let jobs = classify(path, &BTreeSet::new());
+            assert!(
+                jobs.contains("rust") || jobs.contains("tooling"),
+                "missing CI tooling checks: {path}"
+            );
+        }
     }
 }
 

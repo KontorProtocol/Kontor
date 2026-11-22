@@ -21,42 +21,10 @@ use compose_tests::compose_helpers::{
     test_build_tap_script_and_script_address_multi_push_and_structure,
     test_build_tap_script_chunk_boundaries_push_count,
     test_compose_reveal_op_return_size_validation,
-    test_estimate_participant_commit_fees_change_output_difference,
-    test_estimate_participant_commit_fees_deterministic,
-    test_estimate_participant_commit_fees_does_not_modify_base_tx,
-    test_estimate_participant_commit_fees_empty_utxos,
-    test_estimate_participant_commit_fees_fee_rate_scaling,
-    test_estimate_participant_commit_fees_high_fee_rate,
-    test_estimate_participant_commit_fees_input_vsize_delta,
-    test_estimate_participant_commit_fees_many_utxos,
-    test_estimate_participant_commit_fees_minimum_fee_rate,
-    test_estimate_participant_commit_fees_multiple_utxos,
-    test_estimate_participant_commit_fees_output_vsize,
-    test_estimate_participant_commit_fees_single_utxo,
-    test_estimate_participant_commit_fees_with_existing_base_tx,
     test_estimate_participant_commit_fees_with_real_utxos,
-    test_select_utxos_for_commit_change_above_dust, test_select_utxos_for_commit_change_below_dust,
-    test_select_utxos_for_commit_deterministic,
-    test_select_utxos_for_commit_edge_case_change_equals_envelope,
-    test_select_utxos_for_commit_empty_utxos_errors,
-    test_select_utxos_for_commit_envelope_affects_change_threshold,
-    test_select_utxos_for_commit_exact_amount_no_change,
-    test_select_utxos_for_commit_fee_rate_affects_selection,
-    test_select_utxos_for_commit_insufficient_with_fees,
-    test_select_utxos_for_commit_many_small_utxos,
-    test_select_utxos_for_commit_multiple_utxos_selects_minimum,
-    test_select_utxos_for_commit_returns_correct_subset,
-    test_select_utxos_for_commit_script_output_value_affects_selection,
-    test_select_utxos_for_commit_selects_in_order,
-    test_select_utxos_for_commit_single_utxo_insufficient,
-    test_select_utxos_for_commit_single_utxo_sufficient,
-    test_select_utxos_for_commit_with_existing_base_tx,
     test_select_utxos_for_commit_with_real_utxo,
 };
 use compose_tests::legacy_commit_reveal_p2wsh::test_legacy_commit_reveal_p2wsh;
-// legacy_segwit tests skipped — need identity_p2wpkh which requires admin funding
-// use compose_tests::legacy_segwit_envelope::*;
-// use compose_tests::legacy_segwit_swap::*;
 use compose_tests::legacy_taproot_envelope::{
     test_legacy_taproot_envelope_psbt_inscription,
     test_legacy_taproot_inscription_with_wrong_internal_key_without_checksig,
@@ -117,39 +85,9 @@ async fn test_compose_regtest() -> Result<()> {
     test_build_tap_script_chunk_boundaries_push_count(&mut reg_tester.clone()).await?;
 
     info!("estimate_participant_commit_fees");
-    test_estimate_participant_commit_fees_empty_utxos();
-    test_estimate_participant_commit_fees_single_utxo();
-    test_estimate_participant_commit_fees_multiple_utxos();
-    test_estimate_participant_commit_fees_fee_rate_scaling();
-    test_estimate_participant_commit_fees_with_existing_base_tx();
-    test_estimate_participant_commit_fees_deterministic();
-    test_estimate_participant_commit_fees_does_not_modify_base_tx();
-    test_estimate_participant_commit_fees_minimum_fee_rate();
-    test_estimate_participant_commit_fees_high_fee_rate();
-    test_estimate_participant_commit_fees_many_utxos();
-    test_estimate_participant_commit_fees_change_output_difference();
-    test_estimate_participant_commit_fees_input_vsize_delta();
-    test_estimate_participant_commit_fees_output_vsize();
     test_estimate_participant_commit_fees_with_real_utxos(&mut reg_tester.clone()).await?;
 
     info!("select_utxos_for_commit");
-    test_select_utxos_for_commit_empty_utxos_errors();
-    test_select_utxos_for_commit_single_utxo_sufficient();
-    test_select_utxos_for_commit_single_utxo_insufficient();
-    test_select_utxos_for_commit_multiple_utxos_selects_minimum();
-    test_select_utxos_for_commit_selects_in_order();
-    test_select_utxos_for_commit_change_above_dust();
-    test_select_utxos_for_commit_change_below_dust();
-    test_select_utxos_for_commit_fee_rate_affects_selection();
-    test_select_utxos_for_commit_script_output_value_affects_selection();
-    test_select_utxos_for_commit_with_existing_base_tx();
-    test_select_utxos_for_commit_returns_correct_subset();
-    test_select_utxos_for_commit_exact_amount_no_change();
-    test_select_utxos_for_commit_many_small_utxos();
-    test_select_utxos_for_commit_envelope_affects_change_threshold();
-    test_select_utxos_for_commit_deterministic();
-    test_select_utxos_for_commit_insufficient_with_fees();
-    test_select_utxos_for_commit_edge_case_change_equals_envelope();
     test_select_utxos_for_commit_with_real_utxo(&mut reg_tester.clone()).await?;
 
     info!("legacy_taproot_envelope");
@@ -210,10 +148,6 @@ async fn test_compose_regtest() -> Result<()> {
 
     info!("legacy_commit_reveal_p2wsh");
     test_legacy_commit_reveal_p2wsh(&mut reg_tester.clone()).await?;
-
-    // legacy_segwit tests skipped — need identity_p2wpkh which requires admin funding
-    // info!("legacy_segwit_envelope");
-    // info!("legacy_segwit_swap");
 
     info!("compose_api");
     test_compose(&mut reg_tester.clone()).await?;

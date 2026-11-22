@@ -270,7 +270,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/linux-crash-diagnostics"
           echo "$RUNNER_TEMP/linux-crash-diagnostics/core.%p.%E" | sudo tee /proc/sys/kernel/core_pattern
           ulimit -c unlimited
-          npm run test:regtest
+          npx --no-install vitest run --config vitest.regtest.config.ts
         working-directory: ./sdk
       - name: Collect Linux crash diagnostics
         if: failure() && steps.live-regtest.outcome == 'failure'

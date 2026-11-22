@@ -56,12 +56,15 @@ jobs:
         run: |
           rustfmt --edition 2024 --check protocol-bundles/proof/*.rs
           cargo fmt --manifest-path core/Cargo.toml --all -- --check
-      - name: Check builder CLI
+      # Push and PR events run these same builder checks in CI / tooling.
+      - name: Check builder tooling on standalone dispatch
+        if: github.event_name == 'workflow_dispatch'
         run: |
           cargo clippy --locked --manifest-path core/kontor-build/Cargo.toml --all-targets -j2 -- -D warnings
           cargo test --locked --manifest-path core/kontor-build/Cargo.toml -j2
           cargo test --locked --manifest-path core/kontor-build/Cargo.toml --test object_tools -j2 -- --ignored
-          ./tools/kontor protocol-bundles --help
+      - name: Check bundle CLI entry point
+        run: ./tools/kontor protocol-bundles --help
 
   qualification:
     name: Protocol bundles (${{ matrix.os }}, ${{ matrix.profile }})

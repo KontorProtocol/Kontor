@@ -636,7 +636,8 @@ fn make_utxos(count: usize) -> Vec<(OutPoint, TxOut)> {
         .collect()
 }
 
-pub fn test_estimate_participant_commit_fees_empty_utxos() {
+#[test]
+fn test_estimate_participant_commit_fees_empty_utxos() {
     // Empty UTXOs should still work - adds only outputs, no inputs
     let base_tx = make_base_tx(0, 0);
     let utxos: Vec<(OutPoint, TxOut)> = vec![];
@@ -659,7 +660,8 @@ pub fn test_estimate_participant_commit_fees_empty_utxos() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_single_utxo() {
+#[test]
+fn test_estimate_participant_commit_fees_single_utxo() {
     let base_tx = make_base_tx(0, 0);
     let utxos = make_utxos(1);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
@@ -691,7 +693,8 @@ pub fn test_estimate_participant_commit_fees_single_utxo() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_multiple_utxos() {
+#[test]
+fn test_estimate_participant_commit_fees_multiple_utxos() {
     let base_tx = make_base_tx(0, 0);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
 
@@ -733,7 +736,8 @@ pub fn test_estimate_participant_commit_fees_multiple_utxos() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_fee_rate_scaling() {
+#[test]
+fn test_estimate_participant_commit_fees_fee_rate_scaling() {
     let base_tx = make_base_tx(0, 0);
     let utxos = make_utxos(1);
 
@@ -762,7 +766,8 @@ pub fn test_estimate_participant_commit_fees_fee_rate_scaling() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_with_existing_base_tx() {
+#[test]
+fn test_estimate_participant_commit_fees_with_existing_base_tx() {
     // Base tx already has inputs/outputs - delta should only include new stuff
     let base_tx = make_base_tx(2, 2);
     let utxos = make_utxos(1);
@@ -786,7 +791,8 @@ pub fn test_estimate_participant_commit_fees_with_existing_base_tx() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_deterministic() {
+#[test]
+fn test_estimate_participant_commit_fees_deterministic() {
     let base_tx = make_base_tx(1, 1);
     let utxos = make_utxos(2);
     let fee_rate = FeeRate::from_sat_per_vb(7).unwrap();
@@ -797,7 +803,8 @@ pub fn test_estimate_participant_commit_fees_deterministic() {
     assert_eq!(result1, result2, "Same inputs should produce same outputs");
 }
 
-pub fn test_estimate_participant_commit_fees_does_not_modify_base_tx() {
+#[test]
+fn test_estimate_participant_commit_fees_does_not_modify_base_tx() {
     let base_tx = make_base_tx(1, 1);
     let base_tx_clone = base_tx.clone();
     let utxos = make_utxos(2);
@@ -818,7 +825,8 @@ pub fn test_estimate_participant_commit_fees_does_not_modify_base_tx() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_minimum_fee_rate() {
+#[test]
+fn test_estimate_participant_commit_fees_minimum_fee_rate() {
     let base_tx = make_base_tx(0, 0);
     let utxos = make_utxos(1);
     let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
@@ -837,7 +845,8 @@ pub fn test_estimate_participant_commit_fees_minimum_fee_rate() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_high_fee_rate() {
+#[test]
+fn test_estimate_participant_commit_fees_high_fee_rate() {
     let base_tx = make_base_tx(0, 0);
     let utxos = make_utxos(1);
     let fee_rate = FeeRate::from_sat_per_vb(500).unwrap();
@@ -859,7 +868,8 @@ pub fn test_estimate_participant_commit_fees_high_fee_rate() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_many_utxos() {
+#[test]
+fn test_estimate_participant_commit_fees_many_utxos() {
     let base_tx = make_base_tx(0, 0);
     let utxos = make_utxos(10);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
@@ -881,7 +891,8 @@ pub fn test_estimate_participant_commit_fees_many_utxos() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_change_output_difference() {
+#[test]
+fn test_estimate_participant_commit_fees_change_output_difference() {
     // Verify the exact difference between with/without change
     let base_tx = make_base_tx(0, 0);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
@@ -902,7 +913,8 @@ pub fn test_estimate_participant_commit_fees_change_output_difference() {
     }
 }
 
-pub fn test_estimate_participant_commit_fees_input_vsize_delta() {
+#[test]
+fn test_estimate_participant_commit_fees_input_vsize_delta() {
     // Verify each input adds approximately 57-58 vbytes
     let base_tx = make_base_tx(0, 0);
     let fee_rate = FeeRate::from_sat_per_vb(1).unwrap(); // 1 sat/vb for easy math
@@ -932,7 +944,8 @@ pub fn test_estimate_participant_commit_fees_input_vsize_delta() {
     );
 }
 
-pub fn test_estimate_participant_commit_fees_output_vsize() {
+#[test]
+fn test_estimate_participant_commit_fees_output_vsize() {
     // Verify outputs are 43 vbytes each (P2TR)
     let base_tx = make_base_tx(0, 0);
     let utxos = make_utxos(1);
@@ -999,7 +1012,8 @@ fn make_utxos_with_values(values: &[u64]) -> Vec<(OutPoint, TxOut)> {
         .collect()
 }
 
-pub fn test_select_utxos_for_commit_empty_utxos_errors() {
+#[test]
+fn test_select_utxos_for_commit_empty_utxos_errors() {
     let base_tx = make_base_tx(0, 0);
     let utxos: Vec<(OutPoint, TxOut)> = vec![];
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
@@ -1015,7 +1029,8 @@ pub fn test_select_utxos_for_commit_empty_utxos_errors() {
     );
 }
 
-pub fn test_select_utxos_for_commit_single_utxo_sufficient() {
+#[test]
+fn test_select_utxos_for_commit_single_utxo_sufficient() {
     let base_tx = make_base_tx(0, 0);
     // Single large UTXO that can cover script output + fee + change
     let utxos = make_utxos_with_values(&[100_000]);
@@ -1038,7 +1053,8 @@ pub fn test_select_utxos_for_commit_single_utxo_sufficient() {
     );
 }
 
-pub fn test_select_utxos_for_commit_single_utxo_insufficient() {
+#[test]
+fn test_select_utxos_for_commit_single_utxo_insufficient() {
     let base_tx = make_base_tx(0, 0);
     // Single small UTXO that cannot cover script output
     let utxos = make_utxos_with_values(&[500]);
@@ -1057,7 +1073,8 @@ pub fn test_select_utxos_for_commit_single_utxo_insufficient() {
     );
 }
 
-pub fn test_select_utxos_for_commit_multiple_utxos_selects_minimum() {
+#[test]
+fn test_select_utxos_for_commit_multiple_utxos_selects_minimum() {
     let base_tx = make_base_tx(0, 0);
     // Multiple UTXOs - should select minimum needed
     let utxos = make_utxos_with_values(&[1000, 2000, 3000, 50_000]);
@@ -1096,7 +1113,8 @@ pub fn test_select_utxos_for_commit_multiple_utxos_selects_minimum() {
     );
 }
 
-pub fn test_select_utxos_for_commit_selects_in_order() {
+#[test]
+fn test_select_utxos_for_commit_selects_in_order() {
     let base_tx = make_base_tx(0, 0);
     // UTXOs in specific order - selection should be in order provided
     let utxos = make_utxos_with_values(&[5000, 6000, 7000]);
@@ -1126,7 +1144,8 @@ pub fn test_select_utxos_for_commit_selects_in_order() {
     }
 }
 
-pub fn test_select_utxos_for_commit_change_above_dust() {
+#[test]
+fn test_select_utxos_for_commit_change_above_dust() {
     let base_tx = make_base_tx(0, 0);
     // UTXO value chosen so change will be well above dust
     let utxos = make_utxos_with_values(&[100_000]);
@@ -1158,7 +1177,8 @@ pub fn test_select_utxos_for_commit_change_above_dust() {
     );
 }
 
-pub fn test_select_utxos_for_commit_change_below_dust() {
+#[test]
+fn test_select_utxos_for_commit_change_below_dust() {
     let base_tx = make_base_tx(0, 0);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
     let envelope = 330;
@@ -1199,7 +1219,8 @@ pub fn test_select_utxos_for_commit_change_below_dust() {
     );
 }
 
-pub fn test_select_utxos_for_commit_fee_rate_affects_selection() {
+#[test]
+fn test_select_utxos_for_commit_fee_rate_affects_selection() {
     let base_tx = make_base_tx(0, 0);
     // UTXOs that might be sufficient at low fee rate but not at high
     let utxos = make_utxos_with_values(&[2000, 3000, 4000]);
@@ -1245,7 +1266,8 @@ pub fn test_select_utxos_for_commit_fee_rate_affects_selection() {
     // It's also valid for high fee rate to fail if UTXOs are insufficient
 }
 
-pub fn test_select_utxos_for_commit_script_output_value_affects_selection() {
+#[test]
+fn test_select_utxos_for_commit_script_output_value_affects_selection() {
     let base_tx = make_base_tx(0, 0);
     let utxos = make_utxos_with_values(&[5000, 10000, 15000]);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
@@ -1269,7 +1291,8 @@ pub fn test_select_utxos_for_commit_script_output_value_affects_selection() {
     // Large script output might fail if sum of UTXOs < required
 }
 
-pub fn test_select_utxos_for_commit_with_existing_base_tx() {
+#[test]
+fn test_select_utxos_for_commit_with_existing_base_tx() {
     // Base tx already has inputs/outputs - delta fees should be calculated correctly
     let base_tx = make_base_tx(2, 2);
     let utxos = make_utxos_with_values(&[50_000]);
@@ -1292,7 +1315,8 @@ pub fn test_select_utxos_for_commit_with_existing_base_tx() {
     );
 }
 
-pub fn test_select_utxos_for_commit_returns_correct_subset() {
+#[test]
+fn test_select_utxos_for_commit_returns_correct_subset() {
     let base_tx = make_base_tx(0, 0);
     // Create UTXOs with distinct values to verify correct subset is returned
     let utxos = make_utxos_with_values(&[1000, 2000, 3000, 4000, 5000]);
@@ -1323,7 +1347,8 @@ pub fn test_select_utxos_for_commit_returns_correct_subset() {
     }
 }
 
-pub fn test_select_utxos_for_commit_exact_amount_no_change() {
+#[test]
+fn test_select_utxos_for_commit_exact_amount_no_change() {
     let base_tx = make_base_tx(0, 0);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
     let envelope = 330;
@@ -1351,7 +1376,8 @@ pub fn test_select_utxos_for_commit_exact_amount_no_change() {
     );
 }
 
-pub fn test_select_utxos_for_commit_many_small_utxos() {
+#[test]
+fn test_select_utxos_for_commit_many_small_utxos() {
     let base_tx = make_base_tx(0, 0);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
     let envelope = 330;
@@ -1386,7 +1412,8 @@ pub fn test_select_utxos_for_commit_many_small_utxos() {
     );
 }
 
-pub fn test_select_utxos_for_commit_envelope_affects_change_threshold() {
+#[test]
+fn test_select_utxos_for_commit_envelope_affects_change_threshold() {
     let base_tx = make_base_tx(0, 0);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
     let script_output = 1000;
@@ -1412,7 +1439,8 @@ pub fn test_select_utxos_for_commit_envelope_affects_change_threshold() {
     }
 }
 
-pub fn test_select_utxos_for_commit_deterministic() {
+#[test]
+fn test_select_utxos_for_commit_deterministic() {
     let base_tx = make_base_tx(0, 0);
     let utxos = make_utxos_with_values(&[5000, 10000, 15000]);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
@@ -1437,7 +1465,8 @@ pub fn test_select_utxos_for_commit_deterministic() {
     assert_eq!(fee1, fee2, "Fees should be identical");
 }
 
-pub fn test_select_utxos_for_commit_insufficient_with_fees() {
+#[test]
+fn test_select_utxos_for_commit_insufficient_with_fees() {
     // UTXOs sum might cover script output but not when fees are included
     let base_tx = make_base_tx(0, 0);
     let fee_rate = FeeRate::from_sat_per_vb(100).unwrap(); // Very high fee rate
@@ -1458,7 +1487,8 @@ pub fn test_select_utxos_for_commit_insufficient_with_fees() {
     );
 }
 
-pub fn test_select_utxos_for_commit_edge_case_change_equals_envelope() {
+#[test]
+fn test_select_utxos_for_commit_edge_case_change_equals_envelope() {
     let base_tx = make_base_tx(0, 0);
     let fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
     let envelope = 330;
