@@ -3,6 +3,42 @@ use std::net::TcpListener;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[test]
+fn startup_logs_omit_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    for (network, format) in [("signet", "json"), ("bitcoin", "plain")] {
+        let output = Command::new(env!("CARGO_BIN_EXE_kontor"))
+            .arg("run")
+            .current_dir(dir.path())
+            .env("RUST_LOG", "info")
+            .env("LOG_FORMAT", format)
+            .env("NETWORK", network)
+            .env("DATA_DIR", ".")
+            .env("GENESIS_FILE", "missing-genesis.json")
+            .env("BITCOIN_RPC_URL", "http://rpc-url-marker@127.0.0.1:1")
+            .env("BITCOIN_RPC_USER", "rpc-user-marker")
+            .env("BITCOIN_RPC_PASSWORD", "rpc-password-marker")
+            .env("CONSENSUS_PRIVATE_KEY", "inline-key-marker")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let logs = [output.stdout, output.stderr].concat();
+        let logs = String::from_utf8_lossy(&logs);
+        assert!(
+            logs.contains("Starting Kontor"),
+            "{network} startup log missing"
+        );
+        for marker in [
+            "rpc-url-marker",
+            "rpc-user-marker",
+            "rpc-password-marker",
+            "inline-key-marker",
+        ] {
+            assert!(!logs.contains(marker), "{network} startup exposed {marker}");
+        }
+    }
+}
+
 /// The process-level complement to the cluster suite's SIGTERM→exit-0
 /// assertion: a node whose API cannot START must exit non-zero, promptly, with
 /// the real cause on stderr. Before the supervisor rework a bind failure
