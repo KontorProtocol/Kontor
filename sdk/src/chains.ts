@@ -12,7 +12,7 @@
 import { ContractAddress } from "./canonical/ContractAddress.js";
 
 export interface ChainUrls {
-  /** Indexer HTTP API base, e.g. `https://signet.kontor.network:35001/api`. */
+  /** Indexer HTTP API base, e.g. `https://signet.kontor.network:35000/api`. */
   http: string;
   /** Bitcoin Core RPC endpoint, used for UTXO fetching + tx broadcast. */
   bitcoinRpc: string;
@@ -59,7 +59,7 @@ export const signet: Chain = {
   nativeCurrency: { name: "Kontor", symbol: "KOR", decimals: 18 },
   blockTime: 10 * 60 * 1_000,
   urls: {
-    http: "https://signet.kontor.network:35001/api",
+    http: "https://signet.kontor.network:35000/api",
     bitcoinRpc: "https://signet.kontor.network:38332",
   },
   blockExplorer: {

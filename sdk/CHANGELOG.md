@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+The Signet API default is now `https://signet.kontor.network:35000/api`,
+matching the deployed public endpoint.
+
 `session.getProtocol()` now includes the indexed Bitcoin tip and latest checkpoint
 with full hashes and exact decimal heights, read with protocol progress in one
 database snapshot. Compare only ready observations at the same closed position;
