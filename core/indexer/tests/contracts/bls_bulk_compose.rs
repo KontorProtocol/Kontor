@@ -4,35 +4,12 @@ use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{
-    AggregateInfo, AggregateSigner, ContractAddress as IndexerContractAddress, Inst, InstKind,
-    Insts, SignerRef,
-};
+use indexer_types::{ContractAddress as IndexerContractAddress, Inst, InstKind, SignerRef};
 use testlib::*;
 
+use super::bls_helpers::{aggregate_call, aggregate_insts, signer_by_id};
+
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
-
-fn aggregate_call(gas_limit: u64, contract: IndexerContractAddress, expr: String) -> Inst {
-    Inst {
-        gas_limit,
-        kind: InstKind::Call { contract, expr },
-    }
-}
-
-fn signer_by_id(id: u64, nonce: u64) -> AggregateSigner {
-    AggregateSigner {
-        identity: SignerRef::SignerId(id),
-        nonce,
-        sponsored: false,
-    }
-}
-
-fn aggregate_insts(ops: Vec<Inst>, signers: Vec<AggregateSigner>, signature: Vec<u8>) -> Insts {
-    Insts {
-        ops,
-        aggregate: Some(AggregateInfo { signers, signature }),
-    }
-}
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
@@ -129,7 +106,10 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
             &mut publisher,
             aggregate_insts(
                 vec![op0, op1],
-                vec![signer_by_id(signer1_id, 0), signer_by_id(signer2_id, 0)],
+                vec![
+                    signer_by_id(signer1_id, 0, false),
+                    signer_by_id(signer2_id, 0, false),
+                ],
                 aggregate_sig.to_bytes().to_vec(),
             ),
         )
@@ -256,9 +236,9 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
             aggregate_insts(
                 vec![op0, op1, op2],
                 vec![
-                    signer_by_id(signer_id, 0),
-                    signer_by_id(signer_id + 10_000, 0),
-                    signer_by_id(signer_id, 1),
+                    signer_by_id(signer_id, 0, false),
+                    signer_by_id(signer_id + 10_000, 0, false),
+                    signer_by_id(signer_id, 1, false),
                 ],
                 aggregate.to_signature().to_bytes().to_vec(),
             ),
@@ -333,7 +313,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
             &mut publisher,
             aggregate_insts(
                 vec![op],
-                vec![signer_by_id(999_999_999, 0)],
+                vec![signer_by_id(999_999_999, 0, false)],
                 sig.to_bytes().to_vec(),
             ),
         )
@@ -433,7 +413,10 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
             &mut publisher,
             aggregate_insts(
                 vec![op0, op1_tampered],
-                vec![signer_by_id(signer1_id, 0), signer_by_id(signer2_id, 0)],
+                vec![
+                    signer_by_id(signer1_id, 0, false),
+                    signer_by_id(signer2_id, 0, false),
+                ],
                 aggregate.to_signature().to_bytes().to_vec(),
             ),
         )

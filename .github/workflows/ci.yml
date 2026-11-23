@@ -107,12 +107,16 @@ jobs:
       - name: Audit core
         run: |
           cargo audit
-          cargo audit --file ../protocol-bundles/first/Cargo.lock
-          cargo audit --file ../protocol-bundles/second/Cargo.lock
+          # These two checksum-pinned historical fixtures are never selected for current builds.
+          # The active pulley graphs below must pass the url advisory without an exception.
+          cargo audit --file ../protocol-bundles/first/Cargo.lock --ignore RUSTSEC-2026-0592
+          cargo audit --file ../protocol-bundles/second/Cargo.lock --ignore RUSTSEC-2026-0592
           cargo audit --file ../protocol-bundles/pulley-first/Cargo.lock
           cargo audit --file ../protocol-bundles/pulley-second/Cargo.lock
           cargo audit --file ../protocol-bundles/executor-first/Cargo.lock
+          cargo audit --file ../protocol-bundles/executor-observer/Cargo.lock
           cargo audit --file ../protocol-bundles/executor-second/Cargo.lock
+          cargo audit --file ../protocol-bundles/consensus-first/Cargo.lock
           cargo audit --file ../protocol-bundles/node/Cargo.lock
         working-directory: ./core
 
@@ -270,7 +274,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/linux-crash-diagnostics"
           echo "$RUNNER_TEMP/linux-crash-diagnostics/core.%p.%E" | sudo tee /proc/sys/kernel/core_pattern
           ulimit -c unlimited
-          npm run test:regtest
+          npx --no-install vitest run --config vitest.regtest.config.ts
         working-directory: ./sdk
       - name: Collect Linux crash diagnostics
         if: failure() && steps.live-regtest.outcome == 'failure'

@@ -4,38 +4,12 @@ use blst::BLST_ERROR;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{
-    AggregateInfo, AggregateSigner, ContractAddress as IndexerContractAddress, Inst, InstKind,
-    Insts, SignerRef,
-};
+use indexer_types::{ContractAddress as IndexerContractAddress, Inst, InstKind, SignerRef};
 use testlib::*;
 
+use super::bls_helpers::{aggregate_call, aggregate_insts, signer_by_id};
+
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
-
-/// Build an aggregate Insts. Publisher's sponsorship is now per-op on
-/// `AggregateSigner.sponsored`; the cap is `Inst.gas_limit` (the publisher
-/// signs the bulk including each Inst's gas_limit, so they've committed).
-fn aggregate_insts(ops: Vec<Inst>, signers: Vec<AggregateSigner>, signature: Vec<u8>) -> Insts {
-    Insts {
-        ops,
-        aggregate: Some(AggregateInfo { signers, signature }),
-    }
-}
-
-fn call_with_gas_limit(gas_limit: u64, contract: IndexerContractAddress, expr: String) -> Inst {
-    Inst {
-        gas_limit,
-        kind: InstKind::Call { contract, expr },
-    }
-}
-
-fn signer_by_id(id: u64, nonce: u64, sponsored: bool) -> AggregateSigner {
-    AggregateSigner {
-        identity: SignerRef::SignerId(id),
-        nonce,
-        sponsored,
-    }
-}
 
 /// Two co-signers, one publisher. Bulk contains two `Sponsored` ops. After
 /// execution, both result rows should report `payer_signer_id` = publisher's
@@ -90,12 +64,12 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
 
     // Two sponsored ops — co-signers commit nothing of their own balance;
     // publisher's offer covers them at per_op_limit = 50_000 each.
-    let op0 = call_with_gas_limit(
+    let op0 = aggregate_call(
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Id),
     );
-    let op1 = call_with_gas_limit(
+    let op1 = aggregate_call(
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
@@ -218,13 +192,13 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
         .ok_or_else(|| anyhow!("missing signer_id for publisher"))?;
 
     // op0: SelfPay — signer1 pays from their own balance.
-    let op0 = call_with_gas_limit(
+    let op0 = aggregate_call(
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Id),
     );
     // op1: Sponsored — publisher covers it.
-    let op1 = call_with_gas_limit(
+    let op1 = aggregate_call(
         50_000,
         arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),

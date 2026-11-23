@@ -8,35 +8,12 @@ use bitcoin::consensus::encode::deserialize_hex;
 use blst::min_sig::AggregateSignature;
 use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
-use indexer_types::{
-    AggregateInfo, AggregateSigner, ContractAddress as IndexerContractAddress, Inst, InstKind,
-    Insts, SignerRef,
-};
+use indexer_types::{ContractAddress as IndexerContractAddress, Inst, InstKind, SignerRef};
 use testlib::*;
 
+use super::bls_helpers::{aggregate_call, aggregate_insts, signer_by_id};
+
 interface!(name = "arith", path = "../../test-contracts/arith/wit",);
-
-fn aggregate_call(gas_limit: u64, contract: IndexerContractAddress, expr: String) -> Inst {
-    Inst {
-        gas_limit,
-        kind: InstKind::Call { contract, expr },
-    }
-}
-
-fn signer_by_id(id: u64, nonce: u64) -> AggregateSigner {
-    AggregateSigner {
-        identity: SignerRef::SignerId(id),
-        nonce,
-        sponsored: false,
-    }
-}
-
-fn aggregate_insts(ops: Vec<Inst>, signers: Vec<AggregateSigner>, signature: Vec<u8>) -> Insts {
-    Insts {
-        ops,
-        aggregate: Some(AggregateInfo { signers, signature }),
-    }
-}
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()> {
@@ -102,8 +79,8 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
             aggregate_insts(
                 vec![op0, op1],
                 vec![
-                    signer_by_id(signer_id, nonce),
-                    signer_by_id(signer_id, nonce),
+                    signer_by_id(signer_id, nonce, false),
+                    signer_by_id(signer_id, nonce, false),
                 ],
                 aggregate.to_signature().to_bytes().to_vec(),
             ),
@@ -139,7 +116,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
             &mut publisher,
             aggregate_insts(
                 vec![op2],
-                vec![signer_by_id(signer_id, 1)],
+                vec![signer_by_id(signer_id, 1, false)],
                 sig2.to_bytes().to_vec(),
             ),
         )
@@ -207,7 +184,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
         &mut publisher,
         aggregate_insts(
             vec![op0],
-            vec![signer_by_id(signer_id, nonce)],
+            vec![signer_by_id(signer_id, nonce, false)],
             sig0.to_bytes().to_vec(),
         ),
     )
@@ -234,7 +211,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
             &mut publisher,
             aggregate_insts(
                 vec![op1],
-                vec![signer_by_id(signer_id, nonce)],
+                vec![signer_by_id(signer_id, nonce, false)],
                 sig1.to_bytes().to_vec(),
             ),
         )
@@ -288,7 +265,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
             &mut publisher,
             aggregate_insts(
                 vec![failing_op],
-                vec![signer_by_id(signer_id, 0)],
+                vec![signer_by_id(signer_id, 0, false)],
                 failing_sig.to_bytes().to_vec(),
             ),
         )
@@ -338,7 +315,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
             &mut publisher,
             aggregate_insts(
                 vec![recovery_op],
-                vec![signer_by_id(signer_id, 1)],
+                vec![signer_by_id(signer_id, 1, false)],
                 recovery_sig.to_bytes().to_vec(),
             ),
         )
@@ -444,10 +421,10 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
             aggregate_insts(
                 vec![op0, op1, op2, op3],
                 vec![
-                    signer_by_id(signer1_id, 0),
-                    signer_by_id(signer2_id, 0),
-                    signer_by_id(signer1_id, 1),
-                    signer_by_id(signer2_id, 1),
+                    signer_by_id(signer1_id, 0, false),
+                    signer_by_id(signer2_id, 0, false),
+                    signer_by_id(signer1_id, 1, false),
+                    signer_by_id(signer2_id, 1, false),
                 ],
                 aggregate.to_signature().to_bytes().to_vec(),
             ),
@@ -543,7 +520,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
             &mut publisher,
             aggregate_insts(
                 vec![valid_op],
-                vec![signer_by_id(signer_id, 0)],
+                vec![signer_by_id(signer_id, 0, false)],
                 valid_sig.to_bytes().to_vec(),
             ),
         )
@@ -575,7 +552,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
             &mut publisher,
             aggregate_insts(
                 vec![replay_op],
-                vec![signer_by_id(signer_id, 0)],
+                vec![signer_by_id(signer_id, 0, false)],
                 replay_sig.to_bytes().to_vec(),
             ),
         )
@@ -649,7 +626,7 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
         &mut publisher,
         aggregate_insts(
             vec![op.clone()],
-            vec![signer_by_id(signer_id, 0)],
+            vec![signer_by_id(signer_id, 0, false)],
             sig_bytes.clone(),
         ),
     )
@@ -674,7 +651,7 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
     let _ = rt
         .instruction_insts(
             &mut publisher,
-            aggregate_insts(vec![op], vec![signer_by_id(signer_id, 0)], sig_bytes),
+            aggregate_insts(vec![op], vec![signer_by_id(signer_id, 0, false)], sig_bytes),
         )
         .await;
 

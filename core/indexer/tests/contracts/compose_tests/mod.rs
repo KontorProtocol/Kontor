@@ -4,8 +4,6 @@ pub mod compose_api;
 pub mod compose_commit_unit;
 pub mod compose_helpers;
 pub mod legacy_commit_reveal_p2wsh;
-pub mod legacy_segwit_envelope;
-pub mod legacy_segwit_swap;
 pub mod legacy_taproot_envelope;
 pub mod legacy_taproot_swap;
 pub mod multi_psbt_integration;
