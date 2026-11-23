@@ -259,6 +259,7 @@ pub fn reference(root: &Path, manifest: &Path, metadata: &Value) -> Result<Vec<u
         root.join("protocol-bundles/executor-first/definition.bin"),
         root.join("protocol-bundles/executor-second/definition.bin"),
         manifest.with_file_name("definition.bin"),
+        manifest.with_file_name("protocol-release.json"),
     ]
     .into();
     let mut inventory = Inventory {
@@ -349,19 +350,47 @@ pub fn reference(root: &Path, manifest: &Path, metadata: &Value) -> Result<Vec<u
         &hex::encode(Sha256::digest(POLICY)),
     )
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProtocolRelease {
+    definition_sha256: String,
+    implementation_sha256: String,
+}
+
 pub fn verify(root: &Path, manifest: &Path, metadata: &Value) -> Result<Value> {
-    let encoded = reference(root, manifest, metadata)?;
+    let inputs = reference(root, manifest, metadata)?;
     let destination = manifest.with_file_name("definition.bin");
-    ensure!(
-        fs::read(&destination)? == encoded,
-        "reference differs from current source; do not overwrite a released definition"
-    );
+    let definition = fs::read(&destination)?;
+    let definition_sha256 = hex::encode(Sha256::digest(&definition));
     let mut id = Sha256::new();
     id.update(b"kontor/execution-definition/v1\0");
-    id.update(&encoded);
-    Ok(
-        json!({"path":relative(&root.canonicalize()?,&destination.canonicalize()?)?,"bytes":encoded.len(),"sha256":hex::encode(Sha256::digest(&encoded)),"execution_definition_id":hex::encode(id.finalize())}),
-    )
+    id.update(&definition);
+    let mut report = json!({
+        "path":relative(&root.canonicalize()?, &destination.canonicalize()?)?,
+        "bytes":definition.len(),
+        "sha256":definition_sha256,
+        "execution_definition_id":hex::encode(id.finalize())
+    });
+    let binding = manifest.with_file_name("protocol-release.json");
+    if binding.try_exists()? {
+        let release: ProtocolRelease = serde_json::from_slice(&fs::read(binding)?)?;
+        ensure!(
+            definition_sha256 == release.definition_sha256,
+            "released protocol definition changed"
+        );
+        let implementation = hex::encode(Sha256::digest(&inputs));
+        ensure!(
+            implementation == release.implementation_sha256,
+            "unregistered executor implementation {implementation} for released definition {definition_sha256}"
+        );
+        report["implementation_sha256"] = json!(implementation);
+    } else {
+        ensure!(
+            definition == inputs,
+            "reference differs from current source; do not overwrite a released definition"
+        );
+    }
+    Ok(report)
 }
 #[derive(Args)]
 pub struct FreezeArgs {
@@ -401,6 +430,12 @@ pub fn freeze(root: &Path, args: FreezeArgs) -> Result<Value> {
 }
 fn finish(root: &Path, manifest: &Path, metadata: &Value, write: bool) -> Result<Value> {
     if write {
+        ensure!(
+            !manifest
+                .with_file_name("protocol-release.json")
+                .try_exists()?,
+            "cannot rewrite a released executor definition; review the implementation digest in protocol-release.json"
+        );
         fs::write(
             manifest.with_file_name("definition.bin"),
             reference(root, manifest, metadata)?,

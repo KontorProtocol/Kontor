@@ -158,6 +158,31 @@ pub(super) fn source(reference: &DefinitionReference, path: &str) -> Result<[u8;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::coordinator::consensus_rules;
+
+    #[test]
+    fn released_signet_manifest_opens_the_existing_ordering_era() -> Result<()> {
+        let mut chain = ChainId([0; 32]);
+        hex::decode_to_slice(
+            "c3cd01a76b03d71f4a3c2c2cfc3322a9e1c6e90f3c886f19b2b5c3bfd6e8c47e",
+            &mut chain.0,
+        )?;
+        let reference = DefinitionReference::decode(include_bytes!(
+            "../../../../../protocol-bundles/executor-first/definition.bin"
+        ))?;
+        let baseline = Baseline::compose_consensus(chain, &reference, consensus_rules::REFERENCE)?;
+        assert_eq!(
+            hex::encode(baseline.context.protocol.0),
+            "127098dd6dfc924b848915ead535e38a765c11dd8b3a5c9c8b4b833a76cd6bbf"
+        );
+        assert_eq!(
+            hex::encode(baseline.context.era),
+            "0bd8b1538d6f044eaa1b31b3dc7155ef2aa0be8a25000ff6f6bf40d1264b3cc4"
+        );
+        #[cfg(kontor_managed)]
+        assert_eq!(Baseline::for_node(chain)?, baseline);
+        Ok(())
+    }
 
     #[cfg(kontor_managed)]
     #[test]

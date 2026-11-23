@@ -80,6 +80,44 @@ fn references_bind_semantics_lock_features_config_and_inherited_properties() -> 
     Ok(())
 }
 #[test]
+fn compatible_build_resumes_the_released_identity_only_with_an_exact_binding() -> Result<()> {
+    let dir = tempdir()?;
+    let root = dir.path();
+    let (manifest, data) = fixture(root)?;
+    let first = finish(root, &manifest, &data, true)?;
+    let definition = manifest.with_file_name("definition.bin");
+    let anchor = fs::read(&definition)?;
+    fs::write(manifest.with_file_name("Cargo.lock"), "patched dependency")?;
+    let binding = manifest.with_file_name("protocol-release.json");
+    let implementation = hex::encode(Sha256::digest(reference(root, &manifest, &data)?));
+    assert_ne!(json!(implementation), first["sha256"]);
+    assert!(verify(root, &manifest, &data).is_err());
+    fs::write(
+        &binding,
+        serde_json::to_vec(&json!({
+            "definition_sha256": first["sha256"], "implementation_sha256": implementation
+        }))?,
+    )?;
+    let patched = verify(root, &manifest, &data)?;
+    assert_eq!(
+        patched["execution_definition_id"],
+        first["execution_definition_id"]
+    );
+    assert_eq!(patched["implementation_sha256"], implementation);
+    assert!(finish(root, &manifest, &data, true).is_err());
+    assert_eq!(fs::read(&definition)?, anchor);
+    fs::write(&definition, b"substituted protocol")?;
+    assert!(verify(root, &manifest, &data).is_err());
+    fs::write(&definition, anchor)?;
+    fs::write(
+        manifest.with_file_name("Cargo.lock"),
+        "unreviewed dependency",
+    )?;
+    assert!(verify(root, &manifest, &data).is_err());
+    Ok(())
+}
+
+#[test]
 fn platform_outputs_node_modules_and_checkout_location_do_not_change_identity() -> Result<()> {
     let first = tempdir()?;
     let second = tempdir()?;

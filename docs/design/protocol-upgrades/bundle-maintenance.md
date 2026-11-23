@@ -45,7 +45,7 @@ Use this maintenance sequence after changing prelaunch P1:
 2. Run `tools/kontor sync-prelaunch --write`. It derives the observer manifest and
    lock from P1 and copies the qualification contract artifact. Without `--write`
    it rejects drift. The normal builder unit tests also check the checked-in pair.
-3. Run `tools/kontor freeze-execution first --write`, then
+3. For the released P1 graph, verify the reviewed implementation binding as described below with `tools/kontor freeze-execution first`. Then run
    `tools/kontor freeze-execution observer --write`. Refresh the standalone
    `second` development reference when its shared source inputs changed.
 4. If coordinator inputs changed, run `tools/kontor freeze-consensus --write`.
@@ -722,18 +722,28 @@ resident; bundle unloading is unsupported.
 
 ### Execution definition references
 
-Each production executor has an explicit `definition.bin`. Its execution ID
-binds target-independent semantic source hashes, the graph lock, resolved
-features and build policy. The builder verifies this reference before and after
-compilation using unfiltered Cargo metadata. Platform-specific artifact hashes
-remain separate build evidence. A stale reference fails the build; a build does
-not regenerate it. The retained crate embeds its own reference directly, without
-depending on a build-script environment variable.
+A released graph keeps its original `definition.bin`. Its execution ID is part of
+persisted decisions, application history and migration records. The graph's
+`protocol-release.json` pins the SHA-256 of those original bytes and the SHA-256
+of the implementation's current execution reference (source inventory, resolved
+features, lock and build policy). The builder verifies both pins before and after
+compiling and records them in the graph build report. Native artifacts, the
+storage contract, the consensus rules and the complete protocol manifest still
+go through their existing selection and validation paths.
 
-For a changed prelaunch P1, first follow the regeneration sequence above, including
-`tools/kontor freeze-execution first --write` and `tools/kontor freeze-execution observer --write`
-under the pinned toolchain, inspect the changed inputs and ID, then
-qualify the resulting executors. Omitting `--write` only verifies the reference.
+For a compatible executor update, run `tools/kontor freeze-execution first`
+to compute the candidate implementation digest. Review the actual source,
+dependency and feature changes before registering that digest in
+`implementation_sha256`. Rerun verification, build and qualify the node.
+`--write` refuses to replace a released definition. For a consensus-visible
+change, introduce a successor and activate it through the normal protocol
+upgrade process. An unregistered graph still requires byte-for-byte equality
+between its generated reference and `definition.bin`.
+
+The Signet P1 anchor comes from the published image built at `c12450b3`.
+Its registered compatible implementation includes the dependency update from
+PR #640. The observer qualification executor has its own definition and continues
+to use `tools/kontor freeze-execution observer --write` during development.
 The Rust generator resolves locked, unfiltered Cargo metadata offline.
 `tools/kontor execution-definition` exposes the same encoding and verification
 operations through JSON for diagnostics; builds call the Rust library directly. Canonical bytes,
