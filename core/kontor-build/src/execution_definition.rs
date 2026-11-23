@@ -354,7 +354,6 @@ pub fn reference(root: &Path, manifest: &Path, metadata: &Value) -> Result<Vec<u
 #[serde(deny_unknown_fields)]
 struct ProtocolRelease {
     definition_sha256: String,
-    implementation_sha256: String,
 }
 
 pub fn verify(root: &Path, manifest: &Path, metadata: &Value) -> Result<Value> {
@@ -378,12 +377,7 @@ pub fn verify(root: &Path, manifest: &Path, metadata: &Value) -> Result<Value> {
             definition_sha256 == release.definition_sha256,
             "released protocol definition changed"
         );
-        let implementation = hex::encode(Sha256::digest(&inputs));
-        ensure!(
-            implementation == release.implementation_sha256,
-            "unregistered executor implementation {implementation} for released definition {definition_sha256}"
-        );
-        report["implementation_sha256"] = json!(implementation);
+        report["implementation_sha256"] = json!(hex::encode(Sha256::digest(&inputs)));
     } else {
         ensure!(
             definition == inputs,
@@ -434,7 +428,7 @@ fn finish(root: &Path, manifest: &Path, metadata: &Value, write: bool) -> Result
             !manifest
                 .with_file_name("protocol-release.json")
                 .try_exists()?,
-            "cannot rewrite a released executor definition; review the implementation digest in protocol-release.json"
+            "cannot rewrite a released executor definition; introduce a successor for new protocol rules"
         );
         fs::write(
             manifest.with_file_name("definition.bin"),

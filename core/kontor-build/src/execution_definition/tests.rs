@@ -80,7 +80,7 @@ fn references_bind_semantics_lock_features_config_and_inherited_properties() -> 
     Ok(())
 }
 #[test]
-fn compatible_build_resumes_the_released_identity_only_with_an_exact_binding() -> Result<()> {
+fn released_identity_is_stable_and_each_implementation_is_fingerprinted() -> Result<()> {
     let dir = tempdir()?;
     let root = dir.path();
     let (manifest, data) = fixture(root)?;
@@ -95,7 +95,7 @@ fn compatible_build_resumes_the_released_identity_only_with_an_exact_binding() -
     fs::write(
         &binding,
         serde_json::to_vec(&json!({
-            "definition_sha256": first["sha256"], "implementation_sha256": implementation
+            "definition_sha256": first["sha256"]
         }))?,
     )?;
     let patched = verify(root, &manifest, &data)?;
@@ -111,9 +111,21 @@ fn compatible_build_resumes_the_released_identity_only_with_an_exact_binding() -
     fs::write(&definition, anchor)?;
     fs::write(
         manifest.with_file_name("Cargo.lock"),
-        "unreviewed dependency",
+        "another dependency update",
     )?;
-    assert!(verify(root, &manifest, &data).is_err());
+    let next = verify(root, &manifest, &data)?;
+    assert_eq!(
+        next["execution_definition_id"],
+        first["execution_definition_id"]
+    );
+    assert_ne!(
+        next["implementation_sha256"],
+        patched["implementation_sha256"]
+    );
+    assert_eq!(
+        next["implementation_sha256"],
+        hex::encode(Sha256::digest(reference(root, &manifest, &data)?))
+    );
     Ok(())
 }
 
