@@ -36,6 +36,25 @@ jobs:
       - name: Select linked-node builds
         id: select
         run: RUSTC_WRAPPER='' ./tools/kontor ci-scope bundles
+      - name: Show Cargo manifest and executor lockfile changes for protocol review
+        if: github.event_name == 'pull_request' && steps.select.outputs.required == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          patch="$RUNNER_TEMP/executor-dependency-review.diff"
+          git diff --no-color --no-ext-diff "$BASE_SHA...$HEAD_SHA" -- \
+            ':(glob)**/Cargo.toml' ':(glob)protocol-bundles/executor-*/Cargo.lock' > "$patch"
+          {
+            echo '### Cargo manifests and executor lockfiles'
+            if [[ -s "$patch" ]]; then
+              echo 'PR diff preview (first 150 lines, up to 400 characters per line). See Files changed for the full diff.'
+              echo
+              sed -n '1,150p' "$patch" | cut -c1-400 | sed 's/^/    /'
+            else
+              echo 'No changes to these files in this PR.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   controls:
     name: Linked-node build and evidence controls
